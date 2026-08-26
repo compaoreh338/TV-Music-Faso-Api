@@ -111,8 +111,9 @@ public sealed class ProgrammingEngine
         var target = TargetDuration(slotInfo);
         var safety = 0;
         var thematic = theme is not null && !theme.IsEmpty;
+        var maxAttempts = Math.Max(800, (int)Math.Ceiling(target.TotalSeconds / 5.0) + 50);
 
-        while (elapsed < target && safety < 800)
+        while (elapsed < target && safety < maxAttempts)
         {
             safety++;
             var last = playlist.Items.LastOrDefault()?.Clip;
@@ -122,10 +123,12 @@ public sealed class ProgrammingEngine
                 && (daySovereignty < ProgrammingRules.SovereigntyTargetPercent || state.ForeignBudget <= 0);
             var candidate =
                 state.Pick(slotInfo, date.DayOfWeek, last, thematic, _slots, _rules, requireBurkinabe, false, false)
-                ?? state.Pick(slotInfo, date.DayOfWeek, last, thematic, _slots, _rules, requireBurkinabe, false, true)
                 ?? state.Pick(slotInfo, date.DayOfWeek, last, thematic, _slots, _rules, requireBurkinabe, true, false)
+                ?? state.Pick(slotInfo, date.DayOfWeek, last, thematic, _slots, _rules, requireBurkinabe, false, true)
                 ?? state.Pick(slotInfo, date.DayOfWeek, last, thematic, _slots, _rules, requireBurkinabe, true, true)
-                ?? state.Pick(slotInfo, date.DayOfWeek, last, thematic, _slots, _rules, false, true, true);
+                ?? state.Pick(slotInfo, date.DayOfWeek, last, thematic, _slots, _rules, false, true, true)
+                ?? state.Pick(slotInfo, date.DayOfWeek, last, thematic: true, _slots, _rules, false, true, true)
+                ?? state.AnyEligible(last);
 
             if (candidate is null)
             {
@@ -137,7 +140,7 @@ public sealed class ProgrammingEngine
                 Position = playlist.Items.Count + 1,
                 Clip = candidate
             });
-            state.Consume(candidate, requeue: state.Remaining.GetValueOrDefault(candidate.Id) > 1);
+            state.Consume(candidate, requeue: true);
             elapsed += candidate.Duration;
         }
 
@@ -305,13 +308,15 @@ public sealed class ProgrammingEngine
                 }
 
                 var rotated = 0;
-                while (rotated < Math.Min(8, queue.Count))
+                var limit = queue.Count;
+                while (rotated < limit)
                 {
                     var head = queue.Peek();
                     var remaining = Remaining.GetValueOrDefault(head.Id);
                     var playOk = ignorePlayCap || remaining > 0;
+                    var notRepeat = last is null || head.Id != last.Id;
                     var diversityOk = relaxDiversity || !rules.EnforceCulturalDiversity || RespectsDiversity(head, last);
-                    if (playOk && diversityOk)
+                    if (playOk && notRepeat && diversityOk)
                     {
                         scored.Add((head, queue, key, EquityScore(head, key, slotInfo, rules)));
                         break;
@@ -332,6 +337,24 @@ public sealed class ProgrammingEngine
             _lastPickedTurn[best.Key] = _pickTurn;
             _pickTurn++;
             return best.Clip;
+        }
+
+        public Clip? AnyEligible(Clip? last)
+        {
+            if (_catalog.Count == 0)
+            {
+                return null;
+            }
+
+            return _catalog
+                .Where(clip => last is null || clip.Id != last.Id)
+                .OrderBy(clip => PlaysToday.GetValueOrDefault(clip.Id))
+                .ThenBy(clip => clip.LifetimePlayCount)
+                .FirstOrDefault()
+                ?? _catalog
+                    .OrderBy(clip => PlaysToday.GetValueOrDefault(clip.Id))
+                    .ThenBy(clip => clip.LifetimePlayCount)
+                    .First();
         }
 
         public Clip? AnyBurkinabe(Clip? previous, Clip? next, bool relaxDiversity)

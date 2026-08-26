@@ -30,7 +30,7 @@ public sealed class PlaylistExportService
                 Quote(item.Item.Clip.Title),
                 item.Item.Clip.Language.ToDisplayName(),
                 item.Item.Clip.Genre.ToDisplayName(),
-                item.Item.Clip.OriginLabel,
+                ExportText.Origin(item.Item.Clip.IsBurkinabe),
                 item.Item.Clip.DurationLabel,
                 FileOrFallback(item.Item.Clip)));
         }
@@ -47,7 +47,7 @@ public sealed class PlaylistExportService
 
         foreach (var playlist in schedule.Playlists)
         {
-            builder.AppendLine($"# TV-Music Faso — {playlist.Slot.ToDisplayName()}");
+            builder.AppendLine($"# TV-Music Faso - {playlist.Slot.ToDisplayName()}");
             foreach (var item in playlist.Items)
             {
                 builder.AppendLine($"#EXTINF:{(int)item.Clip.Duration.TotalSeconds},{item.Clip.Artist} - {item.Clip.Title}");

@@ -6,12 +6,15 @@ namespace TVMusicFaso.Core.Services;
 
 public sealed class BbdaReportService
 {
-    public string ToMonthlyCsv(IReadOnlyList<BroadcastLogEntry> entries, int year, int month)
+    public string ToMonthlyCsv(IReadOnlyList<BroadcastLogEntry> entries, int year, int month) =>
+        ToPeriodCsv(entries, $"{month:00}/{year}");
+
+    public string ToPeriodCsv(IReadOnlyList<BroadcastLogEntry> entries, string periodLabel)
     {
         var builder = new StringBuilder();
-        builder.AppendLine("Rapport mensuel de diffusion — TV-Music Faso / Filinfo Group");
-        builder.AppendLine($"Organisme;BBDA — Bureau Burkinabè du Droit d'Auteur");
-        builder.AppendLine($"Periode;{month:00}/{year}");
+        builder.AppendLine("Rapport de diffusion - TV-Music Faso / Filinfo Group");
+        builder.AppendLine("Organisme;BBDA - Bureau Burkinabe du Droit d'Auteur");
+        builder.AppendLine($"Periode;{periodLabel}");
         builder.AppendLine($"Passages;{entries.Count}");
         builder.AppendLine($"DureeTotale;{FormatDuration(entries.Aggregate(TimeSpan.Zero, (sum, entry) => sum + entry.Duration))}");
         builder.AppendLine();
@@ -28,7 +31,7 @@ public sealed class BbdaReportService
                 entry.DurationLabel,
                 entry.Language.ToDisplayName(),
                 entry.Genre.ToDisplayName(),
-                entry.OriginLabel,
+                ExportText.Origin(entry.IsBurkinabe),
                 entry.FilePath));
         }
 

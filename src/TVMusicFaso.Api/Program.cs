@@ -121,7 +121,7 @@ app.MapGet("/api/dashboard", (HttpContext http, ApiComposition composition) =>
     });
 });
 
-app.MapGet("/api/reports/bbda", (int? year, int? month, HttpContext http, ApiComposition composition) =>
+app.MapGet("/api/reports/bbda", (DateOnly? from, DateOnly? to, int? year, int? month, HttpContext http, ApiComposition composition) =>
 {
     var session = composition.CurrentSession(http);
     if (session is null)
@@ -134,20 +134,22 @@ app.MapGet("/api/reports/bbda", (int? year, int? month, HttpContext http, ApiCom
         return Denied();
     }
 
-    var when = DateTime.Today;
-    var y = year ?? when.Year;
-    var m = month ?? when.Month;
-    var entries = composition.Broadcasts.GetByMonth(y, m);
-    var sovereignty = entries.Count == 0 ? 0 : 100.0 * entries.Count(item => item.IsBurkinabe) / entries.Count;
+    var period = ResolveBbdaPeriod(composition.Broadcasts, from, to, year, month);
+    var sovereignty = period.Entries.Count == 0
+        ? 0
+        : 100.0 * period.Entries.Count(item => item.IsBurkinabe) / period.Entries.Count;
 
     return Results.Ok(new
     {
-        year = y,
-        month = m,
-        count = entries.Count,
+        year = period.Year,
+        month = period.Month,
+        from = period.From.ToString("yyyy-MM-dd"),
+        to = period.To.ToString("yyyy-MM-dd"),
+        period = period.Label,
+        count = period.Entries.Count,
         sovereignty = Math.Round(sovereignty, 1),
         canExport = session.Policy.CanExportBbda,
-        entries = entries.Select(entry => new
+        entries = period.Entries.Select(entry => new
         {
             date = entry.Date.ToString("yyyy-MM-dd"),
             start = entry.StartTime.ToString("HH:mm"),
@@ -160,7 +162,7 @@ app.MapGet("/api/reports/bbda", (int? year, int? month, HttpContext http, ApiCom
     });
 });
 
-app.MapGet("/api/reports/bbda.csv", (int? year, int? month, HttpContext http, ApiComposition composition) =>
+app.MapGet("/api/reports/bbda.csv", (DateOnly? from, DateOnly? to, int? year, int? month, HttpContext http, ApiComposition composition) =>
 {
     var session = composition.CurrentSession(http);
     if (session is null)
@@ -173,12 +175,10 @@ app.MapGet("/api/reports/bbda.csv", (int? year, int? month, HttpContext http, Ap
         return Denied();
     }
 
-    var when = DateTime.Today;
-    var y = year ?? when.Year;
-    var m = month ?? when.Month;
-    var csv = new BbdaReportService().ToMonthlyCsv(composition.Broadcasts.GetByMonth(y, m), y, m);
-    composition.Audit.Write(session, "Export BBDA web", $"{m:00}/{y}");
-    return Results.File(System.Text.Encoding.UTF8.GetBytes(csv), "text/csv", $"BBDA-{y}-{m:00}.csv");
+    var period = ResolveBbdaPeriod(composition.Broadcasts, from, to, year, month);
+    var csv = new BbdaReportService().ToPeriodCsv(period.Entries, period.Label);
+    composition.Audit.Write(session, "Export BBDA web", period.Label);
+    return Results.File(ExportText.GetUtf8BomBytes(csv), "text/csv", $"BBDA-{period.FileStamp}.csv");
 });
 
 app.MapGet("/api/lookups", (HttpContext http, ApiComposition composition) =>
@@ -196,6 +196,25 @@ app.MapGet("/api/lookups", (HttpContext http, ApiComposition composition) =>
     });
 });
 
+app.MapGet("/api/clips.csv", (HttpContext http, ApiComposition composition) =>
+{
+    if (composition.CurrentSession(http) is null) return Results.Unauthorized();
+    var csv = new LibraryCsvService().Export(composition.Clips.GetAll());
+    return Results.File(ExportText.GetUtf8BomBytes(csv), "text/csv", "mediatheque-tv-music-faso.csv");
+});
+
+app.MapPost("/api/clips/import", async (HttpContext http, ApiComposition composition) =>
+{
+    var session = composition.CurrentSession(http);
+    if (session is null) return Results.Unauthorized();
+    if (!session.Policy.CanEditLibrary) return Denied();
+    using var reader = new StreamReader(http.Request.Body);
+    var csv = await reader.ReadToEndAsync();
+    var imported = new LibraryCsvService().Import(csv, composition.Clips);
+    composition.Audit.Write(session, "Import mediatheque", $"{imported} clips");
+    return Results.Ok(new { imported });
+});
+
 app.MapGet("/api/clips", (string? q, string? genre, string? language, bool? burkinabeOnly, HttpContext http, ApiComposition composition) =>
 {
     if (composition.CurrentSession(http) is null) return Results.Unauthorized();
@@ -209,7 +228,7 @@ app.MapPost("/api/clips", (ClipWriteRequest body, HttpContext http, ApiCompositi
     var session = composition.CurrentSession(http);
     if (session is null) return Results.Unauthorized();
     if (!session.Policy.CanEditLibrary) return Denied();
-    var clip = body.ToClip();
+    var clip = body.ToClip(body.Id);
     composition.Clips.Add(clip);
     composition.Audit.Write(session, "Création clip", clip.Title);
     return Results.Created($"/api/clips/{clip.Id}", ClipDto(clip));
@@ -361,7 +380,10 @@ app.MapGet("/api/export/{format}", (string format, string? date, HttpContext htt
     };
     if (content is null) return Results.BadRequest();
     composition.Audit.Write(session, "Export playout web", name!);
-    return Results.File(System.Text.Encoding.UTF8.GetBytes(content), mime!, name);
+    var payload = format.Equals("csv", StringComparison.OrdinalIgnoreCase)
+        ? ExportText.GetUtf8BomBytes(content)
+        : System.Text.Encoding.UTF8.GetBytes(content);
+    return Results.File(payload, mime!, name);
 });
 
 app.MapGet("/api/security", (HttpContext http, ApiComposition composition) =>
@@ -405,9 +427,14 @@ app.MapPost("/api/backup", (HttpContext http, ApiComposition composition) =>
     }
 });
 
-app.MapGet("/api/constraints", (HttpContext http, ApiComposition composition) =>
+app.MapGet("/api/constraints", (HttpContext http, ApiComposition composition, IConfiguration config) =>
 {
     if (composition.CurrentSession(http) is null) return Results.Unauthorized();
+    var libraryRoot = config["Playout:LibraryRoot"];
+    var playoutRoot = config["Playout:PlayoutRoot"];
+    var mapping = string.IsNullOrWhiteSpace(libraryRoot) || string.IsNullOrWhiteSpace(playoutRoot)
+        ? "Non configuré. Renseignez Playout:LibraryRoot et Playout:PlayoutRoot."
+        : $"{libraryRoot} -> {playoutRoot}";
     return Results.Ok(new
     {
         platform = "PostgreSQL",
@@ -416,14 +443,16 @@ app.MapGet("/api/constraints", (HttpContext http, ApiComposition composition) =>
         slots = SlotRuleCatalog.CreateDefault().Select(rule => rule.Summary),
         rows = new[]
         {
-            new { title = "Volume médiathèque", guarantee = "PostgreSQL — index langue, genre, thème, score." },
-            new { title = "Tranches horaires", guarantee = "8 tranches paramétrables. Vendredi = musique musulmane / terroir. Dimanche = gospel / terroir." },
-            new { title = "Équité de rotation", guarantee = "Personne n’est sacrifié : les moins diffusés passent d’abord. Un Hit a seulement un plafond plus haut (4), pas la priorité." },
+            new { title = "Volume médiathèque", guarantee = "PostgreSQL - index langue, genre, thème, score." },
+            new { title = "Tranches horaires", guarantee = "8 tranches toujours remplies. Vendredi = musique musulmane / terroir. Dimanche = gospel / terroir. Stock bas : réutilisation, puis élargissement d'humeur." },
+            new { title = "Équité de rotation", guarantee = "Personne n'est sacrifié : les moins diffusés passent d'abord. Un Hit a seulement un plafond plus haut (4), pas la priorité." },
             new { title = "Diversité culturelle", guarantee = "Interdiction de deux clips consécutifs de même langue ou même genre." },
-            new { title = "Cible / horaire", guarantee = "Préférence d’audience selon la tranche, sans vider la grille." },
+            new { title = "Cible / horaire", guarantee = "Préférence d'audience selon la tranche, sans vider la grille." },
             new { title = "Souveraineté 90 %", guarantee = "Alerte visuelle dès que le ratio burkinabè passe sous 90 %." },
             new { title = "Outils de diffusion", guarantee = "Exports : MPL MovieJaySX, XML/CSV vMix, M3U OBS." },
-            new { title = "Conformité BBDA", guarantee = "Rapport mensuel horodaté titre, interprète, durée, passages." }
+            new { title = "Conformité BBDA", guarantee = "Rapport horodaté (mois ou intervalle) : titre, interprète, durée, passages, synthèse par oeuvre." },
+            new { title = "API partagée", guarantee = "Desktop et web parlent à la même base PostgreSQL en HTTPS. Le bureau garde une copie locale pour continuer si le serveur tombe." },
+            new { title = "Mapping playout", guarantee = mapping }
         }
     });
 });
@@ -452,6 +481,42 @@ static IResult Denied() => Results.Json(new { message = "Accès refusé pour ce 
 
 static DateOnly ParseDate(string? value) =>
     DateOnly.TryParse(value, out var date) ? date : DateOnly.FromDateTime(DateTime.Today);
+
+static (IReadOnlyList<BroadcastLogEntry> Entries, DateOnly From, DateOnly To, int Year, int Month, string Label, string FileStamp)
+    ResolveBbdaPeriod(IBroadcastLog log, DateOnly? from, DateOnly? to, int? year, int? month)
+{
+    if (from is not null || to is not null)
+    {
+        var start = from ?? to!.Value;
+        var end = to ?? from!.Value;
+        if (start > end)
+        {
+            (start, end) = (end, start);
+        }
+
+        var label = start == end
+            ? start.ToString("dd/MM/yyyy")
+            : $"{start:dd/MM/yyyy} - {end:dd/MM/yyyy}";
+        var stamp = start == end
+            ? start.ToString("yyyy-MM-dd")
+            : $"{start:yyyy-MM-dd}_{end:yyyy-MM-dd}";
+        return (log.GetByRange(start, end), start, end, start.Year, start.Month, label, stamp);
+    }
+
+    var today = DateTime.Today;
+    var resolvedYear = year ?? today.Year;
+    var resolvedMonth = month ?? today.Month;
+    var monthStart = new DateOnly(resolvedYear, resolvedMonth, 1);
+    var monthEnd = monthStart.AddMonths(1).AddDays(-1);
+    return (
+        log.GetByMonth(resolvedYear, resolvedMonth),
+        monthStart,
+        monthEnd,
+        resolvedYear,
+        resolvedMonth,
+        $"{resolvedMonth:00}/{resolvedYear}",
+        $"{resolvedYear}-{resolvedMonth:00}");
+}
 
 static object[] EnumOptions<T>() where T : struct, Enum =>
     Enum.GetValues<T>().Select(value => new { value = value.ToString(), label = value.ToDisplayName() }).ToArray<object>();
@@ -535,6 +600,7 @@ public sealed record SaveItemRequest(Guid ClipId, bool IsLocked);
 public sealed record ProfileRequest(string? FullName, string? UserName);
 public sealed record PasswordRequest(string? CurrentPassword, string? NewPassword);
 public sealed record ClipWriteRequest(
+    Guid? Id,
     string? Title,
     string? Artist,
     decimal? Year,
@@ -559,7 +625,11 @@ public sealed record ClipWriteRequest(
     {
         var clip = new Clip
         {
-            Id = id ?? Guid.NewGuid(),
+            Id = id is { } explicitId && explicitId != Guid.Empty
+                ? explicitId
+                : Id is { } bodyId && bodyId != Guid.Empty
+                    ? bodyId
+                    : Guid.NewGuid(),
             Title = Title?.Trim() ?? "",
             Artist = Artist?.Trim() ?? "",
             Year = Year ?? DateTime.Today.Year,

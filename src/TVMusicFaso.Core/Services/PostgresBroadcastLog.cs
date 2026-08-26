@@ -72,6 +72,19 @@ public sealed class PostgresBroadcastLog : IBroadcastLog
             });
     }
 
+    public IReadOnlyList<BroadcastLogEntry> GetByRange(DateOnly from, DateOnly to)
+    {
+        var start = from <= to ? from : to;
+        var end = from <= to ? to : from;
+        return Query(
+            "WHERE date >= @from AND date <= @to ORDER BY date, start_time",
+            command =>
+            {
+                command.Parameters.AddWithValue("from", start.ToDateTime(TimeOnly.MinValue));
+                command.Parameters.AddWithValue("to", end.ToDateTime(TimeOnly.MinValue));
+            });
+    }
+
     public IReadOnlyList<BroadcastLogEntry> GetRecent(int take = 200) =>
         Query(
             "ORDER BY date DESC, start_time DESC LIMIT @take",

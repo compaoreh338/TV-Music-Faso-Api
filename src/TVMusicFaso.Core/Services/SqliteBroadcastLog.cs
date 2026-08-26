@@ -69,6 +69,17 @@ public sealed class SqliteBroadcastLog : IBroadcastLog
         });
     }
 
+    public IReadOnlyList<BroadcastLogEntry> GetByRange(DateOnly from, DateOnly to)
+    {
+        var start = from <= to ? from : to;
+        var end = from <= to ? to : from;
+        return Query("WHERE Date >= $from AND Date <= $to ORDER BY Date, StartTime", command =>
+        {
+            command.Parameters.AddWithValue("$from", start.ToString("yyyy-MM-dd"));
+            command.Parameters.AddWithValue("$to", end.ToString("yyyy-MM-dd"));
+        });
+    }
+
     public IReadOnlyList<BroadcastLogEntry> GetRecent(int take = 200) =>
         Query($"ORDER BY Date DESC, StartTime DESC LIMIT {Math.Clamp(take, 1, 2000)}");
 

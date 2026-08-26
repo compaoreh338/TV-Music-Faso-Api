@@ -32,7 +32,7 @@ public sealed class UserSession
 
     public bool IsOffline { get; init; }
 
-    public AccessPolicy Policy => new(User.Role, IsOffline);
+    public AccessPolicy Policy => new(User.Role);
 
     public string TokenPreview => AccessToken.Length <= 10 ? AccessToken : $"{AccessToken[..8]}…";
 

@@ -43,6 +43,17 @@ public sealed class InMemoryBroadcastLog : IBroadcastLog
             .ThenBy(entry => entry.StartTime)
             .ToList();
 
+    public IReadOnlyList<BroadcastLogEntry> GetByRange(DateOnly from, DateOnly to)
+    {
+        var start = from <= to ? from : to;
+        var end = from <= to ? to : from;
+        return _entries
+            .Where(entry => entry.Date >= start && entry.Date <= end)
+            .OrderBy(entry => entry.Date)
+            .ThenBy(entry => entry.StartTime)
+            .ToList();
+    }
+
     public IReadOnlyList<BroadcastLogEntry> GetRecent(int take = 200) =>
         _entries.OrderByDescending(entry => entry.Date).ThenByDescending(entry => entry.StartTime).Take(take).ToList();
 }
