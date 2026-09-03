@@ -18,7 +18,29 @@ public enum ClipLanguage
     Dioula,
     Fulfulde,
     Francais,
-    Autre
+    Autre,
+    Bissa,
+    Gourmanche,
+    Bwamu,
+    Dagara,
+    Lobi,
+    Lyele,
+    Nuni,
+    Senoufo,
+    San,
+    Kassena,
+    Bobo,
+    Marka,
+    Tamasheq,
+    Birifor,
+    Cerma,
+    Koromfe,
+    Siamou,
+    Turka,
+    Winye,
+    Dogose,
+    Ninkare,
+    Hausa
 }
 
 public enum ClipTheme

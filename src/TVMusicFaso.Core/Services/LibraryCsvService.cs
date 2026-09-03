@@ -30,7 +30,10 @@ public sealed class LibraryCsvService
                 Title = columns[0],
                 Artist = columns[1],
                 Year = ParseDecimal(Get(columns, 2), DateTime.Today.Year),
-                Language = ParseEnum(Get(columns, 3), ClipLanguage.Moore),
+                Language = LanguageCatalog.MapEnum(Get(columns, 3)),
+                LanguageName = string.IsNullOrWhiteSpace(Get(columns, 3))
+                    ? LanguageCatalog.LabelFor(LanguageCatalog.MapEnum(Get(columns, 3)))
+                    : Get(columns, 3),
                 Genre = ParseEnum(Get(columns, 4), MusicalGenre.AfroPop),
                 Theme = ParseEnum(Get(columns, 5), ClipTheme.Amour),
                 Audience = ParseEnum(Get(columns, 6), Audience.Famille),
@@ -58,7 +61,7 @@ public sealed class LibraryCsvService
                 clip.Title,
                 clip.Artist,
                 clip.Year.ToString(CultureInfo.InvariantCulture),
-                clip.Language,
+                clip.LanguageLabel,
                 clip.Genre,
                 clip.Theme,
                 clip.Audience,

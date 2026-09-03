@@ -14,5 +14,7 @@ public interface IClipRepository
 
     void Remove(Guid id);
 
+    void SetValidation(Guid id, ClipValidationStatus status, string? note = null);
+
     IReadOnlyList<Clip> Search(string? query, MusicalGenre? genre, ClipLanguage? language, bool? burkinabeOnly);
 }

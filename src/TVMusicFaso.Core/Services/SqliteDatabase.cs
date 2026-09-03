@@ -83,6 +83,14 @@ internal static class SqliteDatabase
                 ExpiresAt TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS languages (
+                Id TEXT PRIMARY KEY,
+                Code TEXT NOT NULL UNIQUE,
+                Label TEXT NOT NULL,
+                EnumValue INTEGER NOT NULL,
+                IsSeeded INTEGER NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS audit_logs (
                 Id TEXT PRIMARY KEY,
                 At TEXT NOT NULL,
@@ -100,6 +108,9 @@ internal static class SqliteDatabase
         AddColumn(connection, "clips", "ThumbnailPath", "TEXT NOT NULL DEFAULT ''");
         AddColumn(connection, "clips", "BroadcastFailureCount", "INTEGER NOT NULL DEFAULT 0");
         AddColumn(connection, "clips", "LastBroadcastFailureNote", "TEXT NOT NULL DEFAULT ''");
+        AddColumn(connection, "clips", "ValidationStatus", "INTEGER NOT NULL DEFAULT 1");
+        AddColumn(connection, "clips", "ValidationNote", "TEXT NOT NULL DEFAULT ''");
+        AddColumn(connection, "clips", "LanguageName", "TEXT NOT NULL DEFAULT ''");
     }
 
     private static void AddColumn(SqliteConnection connection, string table, string column, string declaration)

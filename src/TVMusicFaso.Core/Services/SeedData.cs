@@ -56,6 +56,7 @@ public static class SeedData
             Year = year,
             Genre = genre,
             Language = language,
+            LanguageName = language.ToDisplayName(),
             Theme = theme,
             Audience = audience,
             CommitteeRating = (decimal)score,
@@ -68,6 +69,7 @@ public static class SeedData
             OriginPlace = origin,
             FilmingLocation = filming,
             Quality = score >= 4.5 ? VideoQuality.Uhd4K : VideoQuality.Hd,
-            FilePath = $"/mediatheque/{artist}/{title}.mp4".ToLowerInvariant()
+            FilePath = $"/mediatheque/{artist}/{title}.mp4".ToLowerInvariant(),
+            ValidationStatus = ClipValidationStatus.Validated
         };
 }

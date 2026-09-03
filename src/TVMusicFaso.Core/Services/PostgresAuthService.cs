@@ -45,7 +45,11 @@ public sealed class PostgresAuthService : IAuthService
             IsActive = true
         };
         reader.Close();
+        return IssueSession(connection, user);
+    }
 
+    private static UserSession IssueSession(NpgsqlConnection connection, AppUser user, AppUser? impersonatedBy = null)
+    {
         var token = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
         var expires = DateTimeOffset.Now.AddHours(8);
         using var insert = new NpgsqlCommand(
@@ -56,7 +60,13 @@ public sealed class PostgresAuthService : IAuthService
         insert.Parameters.AddWithValue("e", expires);
         insert.ExecuteNonQuery();
 
-        return new UserSession { User = user, AccessToken = token, ExpiresAt = expires };
+        return new UserSession
+        {
+            User = user,
+            AccessToken = token,
+            ExpiresAt = expires,
+            ImpersonatedBy = impersonatedBy
+        };
     }
 
     public UserSession? GetSession(string accessToken)
@@ -195,6 +205,190 @@ public sealed class PostgresAuthService : IAuthService
         update.ExecuteNonQuery();
 
         return ProfileChangeResult.Success("Mot de passe mis à jour.");
+    }
+
+    public IReadOnlyList<AppUser> ListUsers(UserSession actor)
+    {
+        if (UserAdmin.RejectIfUnauthorized(actor) is not null)
+        {
+            return [];
+        }
+
+        using var connection = PostgresDatabase.Open(_connectionString);
+        return ReadUsers(connection);
+    }
+
+    public UserAdminResult CreateUser(UserSession actor, string fullName, string userName, string password, UserRole role)
+    {
+        if (UserAdmin.RejectIfUnauthorized(actor) is { } denied)
+        {
+            return denied;
+        }
+
+        fullName = fullName.Trim();
+        userName = userName.Trim();
+        if (UserAdmin.RejectIdentity(fullName, userName) is { } identity)
+        {
+            return identity;
+        }
+
+        if (UserAdmin.RejectPassword(password) is { } secret)
+        {
+            return secret;
+        }
+
+        using var connection = PostgresDatabase.Open(_connectionString);
+        if (UserNameTaken(connection, userName, Guid.Empty))
+        {
+            return UserAdminResult.Fail("Cet identifiant est déjà utilisé.");
+        }
+
+        using var insert = new NpgsqlCommand(
+            """
+            INSERT INTO users (id, full_name, user_name, password_hash, role, is_active)
+            VALUES (@id, @name, @user, @hash, @role, TRUE);
+            """,
+            connection);
+        insert.Parameters.AddWithValue("id", Guid.NewGuid());
+        insert.Parameters.AddWithValue("name", fullName);
+        insert.Parameters.AddWithValue("user", userName);
+        insert.Parameters.AddWithValue("hash", PasswordHasher.Hash(password));
+        insert.Parameters.AddWithValue("role", (int)role);
+        insert.ExecuteNonQuery();
+
+        return UserAdminResult.Success($"Compte « {userName} » créé ({role.ToDisplayName()}).");
+    }
+
+    public UserAdminResult UpdateUser(UserSession actor, Guid id, string fullName, string userName, UserRole role, bool isActive)
+    {
+        if (UserAdmin.RejectIfUnauthorized(actor) is { } denied)
+        {
+            return denied;
+        }
+
+        fullName = fullName.Trim();
+        userName = userName.Trim();
+        if (UserAdmin.RejectIdentity(fullName, userName) is { } identity)
+        {
+            return identity;
+        }
+
+        using var connection = PostgresDatabase.Open(_connectionString);
+        var users = ReadUsers(connection);
+        if (UserAdmin.RejectDirectoryChange(actor, users, id, role, isActive) is { } directory)
+        {
+            return directory;
+        }
+
+        if (UserNameTaken(connection, userName, id))
+        {
+            return UserAdminResult.Fail("Cet identifiant est déjà utilisé.");
+        }
+
+        using var update = new NpgsqlCommand(
+            """
+            UPDATE users
+            SET full_name = @name, user_name = @user, role = @role, is_active = @active
+            WHERE id = @id;
+            """,
+            connection);
+        update.Parameters.AddWithValue("name", fullName);
+        update.Parameters.AddWithValue("user", userName);
+        update.Parameters.AddWithValue("role", (int)role);
+        update.Parameters.AddWithValue("active", isActive);
+        update.Parameters.AddWithValue("id", id);
+        update.ExecuteNonQuery();
+
+        if (!isActive)
+        {
+            using var revoke = new NpgsqlCommand("DELETE FROM sessions WHERE user_id = @id;", connection);
+            revoke.Parameters.AddWithValue("id", id);
+            revoke.ExecuteNonQuery();
+        }
+
+        if (id == actor.User.Id)
+        {
+            actor.User.FullName = fullName;
+            actor.User.UserName = userName;
+            actor.User.Role = role;
+        }
+
+        return UserAdminResult.Success($"Compte « {userName} » mis à jour.");
+    }
+
+    public UserAdminResult ResetPassword(UserSession actor, Guid id, string newPassword)
+    {
+        if (UserAdmin.RejectIfUnauthorized(actor) is { } denied)
+        {
+            return denied;
+        }
+
+        if (UserAdmin.RejectPassword(newPassword) is { } secret)
+        {
+            return secret;
+        }
+
+        using var connection = PostgresDatabase.Open(_connectionString);
+        using var update = new NpgsqlCommand("UPDATE users SET password_hash = @hash WHERE id = @id;", connection);
+        update.Parameters.AddWithValue("hash", PasswordHasher.Hash(newPassword));
+        update.Parameters.AddWithValue("id", id);
+        return update.ExecuteNonQuery() == 0
+            ? UserAdminResult.Fail("Utilisateur introuvable.")
+            : UserAdminResult.Success("Mot de passe réinitialisé.");
+    }
+
+    public ImpersonationResult Impersonate(UserSession actor, Guid userId)
+    {
+        using var connection = PostgresDatabase.Open(_connectionString);
+        var target = ReadUsers(connection).FirstOrDefault(user => user.Id == userId);
+        if (UserAdmin.RejectImpersonation(actor, target) is { } denied)
+        {
+            return ImpersonationResult.Fail(denied.Message);
+        }
+
+        var session = IssueSession(connection, target!, actor.User);
+        return ImpersonationResult.Success(
+            session,
+            $"Vous voyez l’application comme {target!.FullName} ({target.RoleLabel}).");
+    }
+
+    private static List<AppUser> ReadUsers(NpgsqlConnection connection)
+    {
+        using var command = new NpgsqlCommand(
+            """
+            SELECT id, full_name, user_name, role, is_active
+            FROM users
+            ORDER BY full_name;
+            """,
+            connection);
+        using var reader = command.ExecuteReader();
+        var users = new List<AppUser>();
+        while (reader.Read())
+        {
+            users.Add(new AppUser
+            {
+                Id = reader.GetGuid(0),
+                FullName = reader.GetString(1),
+                UserName = reader.GetString(2),
+                Role = (UserRole)reader.GetInt32(3),
+                IsActive = reader.GetBoolean(4)
+            });
+        }
+
+        return users;
+    }
+
+    private static bool UserNameTaken(NpgsqlConnection connection, string userName, Guid exceptId)
+    {
+        using var taken = new NpgsqlCommand(
+            """
+            SELECT COUNT(*) FROM users
+            WHERE lower(user_name) = lower(@user) AND id <> @id;
+            """,
+            connection);
+        taken.Parameters.AddWithValue("user", userName);
+        taken.Parameters.AddWithValue("id", exceptId);
+        return Convert.ToInt64(taken.ExecuteScalar()) > 0;
     }
 
     private static bool SessionBelongsToUser(NpgsqlConnection connection, UserSession session)

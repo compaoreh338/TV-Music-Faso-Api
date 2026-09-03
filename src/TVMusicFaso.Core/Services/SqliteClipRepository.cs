@@ -73,6 +73,9 @@ public sealed class SqliteClipRepository : IClipRepository
         command.ExecuteNonQuery();
     }
 
+    public void SetValidation(Guid id, ClipValidationStatus status, string? note = null) =>
+        ClipValidation.Apply(this, id, status, note);
+
     public IReadOnlyList<Clip> Search(string? query, MusicalGenre? genre, ClipLanguage? language, bool? burkinabeOnly)
     {
         using var connection = SqliteDatabase.Open(_databasePath);
@@ -108,26 +111,30 @@ public sealed class SqliteClipRepository : IClipRepository
             ? """
               INSERT INTO clips (
                   Id, Title, Artist, Year, OriginPlace, FilmingLocation, IsBurkinabe, Quality, Format,
-                  DurationTicks, Genre, Language, Theme, Audience, ImpactScore, IsPremium,
+                  DurationTicks, Genre, Language, LanguageName, Theme, Audience, ImpactScore, IsPremium,
                   IsMorallyCompliant, FilePath, LifetimePlayCount, CommitteeRating, PopularityScore,
-                  SocialScore, ThumbnailPath, BroadcastFailureCount, LastBroadcastFailureNote)
+                  SocialScore, ThumbnailPath, BroadcastFailureCount, LastBroadcastFailureNote,
+                  ValidationStatus, ValidationNote)
               VALUES (
                   $Id, $Title, $Artist, $Year, $OriginPlace, $FilmingLocation, $IsBurkinabe, $Quality, $Format,
-                  $DurationTicks, $Genre, $Language, $Theme, $Audience, $ImpactScore, $IsPremium,
+                  $DurationTicks, $Genre, $Language, $LanguageName, $Theme, $Audience, $ImpactScore, $IsPremium,
                   $IsMorallyCompliant, $FilePath, $LifetimePlayCount, $CommitteeRating, $PopularityScore,
-                  $SocialScore, $ThumbnailPath, $BroadcastFailureCount, $LastBroadcastFailureNote);
+                  $SocialScore, $ThumbnailPath, $BroadcastFailureCount, $LastBroadcastFailureNote,
+                  $ValidationStatus, $ValidationNote);
               """
             : """
               UPDATE clips SET
                   Title = $Title, Artist = $Artist, Year = $Year, OriginPlace = $OriginPlace,
                   FilmingLocation = $FilmingLocation, IsBurkinabe = $IsBurkinabe, Quality = $Quality,
                   Format = $Format, DurationTicks = $DurationTicks, Genre = $Genre, Language = $Language,
+                  LanguageName = $LanguageName,
                   Theme = $Theme, Audience = $Audience, ImpactScore = $ImpactScore, IsPremium = $IsPremium,
                   IsMorallyCompliant = $IsMorallyCompliant, FilePath = $FilePath,
                   LifetimePlayCount = $LifetimePlayCount, CommitteeRating = $CommitteeRating,
                   PopularityScore = $PopularityScore, SocialScore = $SocialScore,
                   ThumbnailPath = $ThumbnailPath, BroadcastFailureCount = $BroadcastFailureCount,
-                  LastBroadcastFailureNote = $LastBroadcastFailureNote
+                  LastBroadcastFailureNote = $LastBroadcastFailureNote,
+                  ValidationStatus = $ValidationStatus, ValidationNote = $ValidationNote
               WHERE Id = $Id;
               """;
         return command;
@@ -147,6 +154,9 @@ public sealed class SqliteClipRepository : IClipRepository
         command.Parameters.AddWithValue("$DurationTicks", clip.Duration.Ticks);
         command.Parameters.AddWithValue("$Genre", (int)clip.Genre);
         command.Parameters.AddWithValue("$Language", (int)clip.Language);
+        command.Parameters.AddWithValue("$LanguageName", string.IsNullOrWhiteSpace(clip.LanguageName)
+            ? LanguageCatalog.LabelFor(clip.Language)
+            : clip.LanguageName);
         command.Parameters.AddWithValue("$Theme", (int)clip.Theme);
         command.Parameters.AddWithValue("$Audience", (int)clip.Audience);
         command.Parameters.AddWithValue("$ImpactScore", clip.ImpactScore.ToString(CultureInfo.InvariantCulture));
@@ -160,6 +170,8 @@ public sealed class SqliteClipRepository : IClipRepository
         command.Parameters.AddWithValue("$ThumbnailPath", clip.ThumbnailPath);
         command.Parameters.AddWithValue("$BroadcastFailureCount", clip.BroadcastFailureCount);
         command.Parameters.AddWithValue("$LastBroadcastFailureNote", clip.LastBroadcastFailureNote);
+        command.Parameters.AddWithValue("$ValidationStatus", (int)clip.ValidationStatus);
+        command.Parameters.AddWithValue("$ValidationNote", clip.ValidationNote);
     }
 
     private static Clip ReadClip(SqliteDataReader reader) =>
@@ -177,6 +189,7 @@ public sealed class SqliteClipRepository : IClipRepository
             Duration = TimeSpan.FromTicks(reader.GetInt64(reader.GetOrdinal("DurationTicks"))),
             Genre = (MusicalGenre)reader.GetInt32(reader.GetOrdinal("Genre")),
             Language = (ClipLanguage)reader.GetInt32(reader.GetOrdinal("Language")),
+            LanguageName = ReadString(reader, "LanguageName"),
             Theme = (ClipTheme)reader.GetInt32(reader.GetOrdinal("Theme")),
             Audience = (Audience)reader.GetInt32(reader.GetOrdinal("Audience")),
             ImpactScore = decimal.Parse(reader.GetString(reader.GetOrdinal("ImpactScore")), CultureInfo.InvariantCulture),
@@ -189,7 +202,9 @@ public sealed class SqliteClipRepository : IClipRepository
             SocialScore = ReadDecimal(reader, "SocialScore", 3),
             ThumbnailPath = ReadString(reader, "ThumbnailPath"),
             BroadcastFailureCount = ReadInt(reader, "BroadcastFailureCount"),
-            LastBroadcastFailureNote = ReadString(reader, "LastBroadcastFailureNote")
+            LastBroadcastFailureNote = ReadString(reader, "LastBroadcastFailureNote"),
+            ValidationStatus = (ClipValidationStatus)ReadInt(reader, "ValidationStatus", 1),
+            ValidationNote = ReadString(reader, "ValidationNote")
         };
 
     private static string ReadString(SqliteDataReader reader, string column)
@@ -198,10 +213,17 @@ public sealed class SqliteClipRepository : IClipRepository
         return reader.IsDBNull(ordinal) ? string.Empty : reader.GetString(ordinal);
     }
 
-    private static int ReadInt(SqliteDataReader reader, string column)
+    private static int ReadInt(SqliteDataReader reader, string column, int fallback = 0)
     {
-        var ordinal = reader.GetOrdinal(column);
-        return reader.IsDBNull(ordinal) ? 0 : reader.GetInt32(ordinal);
+        try
+        {
+            var ordinal = reader.GetOrdinal(column);
+            return reader.IsDBNull(ordinal) ? fallback : reader.GetInt32(ordinal);
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return fallback;
+        }
     }
 
     private static decimal ReadDecimal(SqliteDataReader reader, string column, decimal fallback)

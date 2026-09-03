@@ -13,15 +13,21 @@ public sealed class ApiComposition
         Clips = new PostgresClipRepository(connection);
         Auth = new PostgresAuthService(connection);
         Auth.EnsureSeedUsers();
+        Languages = new PostgresLanguageCatalog(connection);
+        InstallSeeder.SeedLanguages(Languages);
         Schedules = new PostgresScheduleStore(connection);
         Broadcasts = new PostgresBroadcastLog(connection);
         Audit = new PostgresAuditLog(connection);
         Engine = new TVMusicFaso.Core.Rules.ProgrammingEngine();
-        var libraryRoot = configuration["Playout:LibraryRoot"];
+        LibraryRoot = configuration["Playout:LibraryRoot"];
         var playoutRoot = configuration["Playout:PlayoutRoot"];
-        Export = new PlaylistExportService(new PlayoutPathMapper(libraryRoot, playoutRoot));
+        Export = new PlaylistExportService(new PlayoutPathMapper(LibraryRoot, playoutRoot));
         Backup = new BackupService();
     }
+
+    public string? LibraryRoot { get; }
+
+    public ILanguageCatalog Languages { get; }
 
     public IClipRepository Clips { get; }
 

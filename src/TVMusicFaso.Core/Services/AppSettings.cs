@@ -45,7 +45,11 @@ public sealed class AppSettings
         PremiumDailyPlayCap = PremiumDailyPlayCap
     };
 
-    public SlotRuleCatalog ToSlotCatalog() => new(SlotRules.Count == 0 ? SlotRuleCatalog.CreateDefault() : SlotRules);
+    public SlotRuleCatalog ToSlotCatalog()
+    {
+        SlotRules = SlotRuleCatalog.Normalize(SlotRules);
+        return new SlotRuleCatalog(SlotRules);
+    }
 
     private static JsonSerializerOptions JsonOptions() => new()
     {

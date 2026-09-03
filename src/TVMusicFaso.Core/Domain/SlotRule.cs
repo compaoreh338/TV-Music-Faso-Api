@@ -19,13 +19,27 @@ public sealed class SlotRule
 
     public string Summary =>
         $"{Slot.ToDisplayName()} · {Mood.ToDisplayName()} · {Audience.ToDisplayName()}";
+
+    public string ClockLabel
+    {
+        get
+        {
+            var clock = TimeSlotInfo.For(Slot);
+            var end = clock.Start.Add(clock.Duration);
+            return $"{clock.Start:HH\\hmm}–{end:HH\\hmm} · {clock.Duration.TotalHours:0} h";
+        }
+    }
+
+    public string GenresLabel => AllowedGenres.Count == 0
+        ? "Tous genres"
+        : string.Join(" · ", AllowedGenres.Select(genre => genre.ToDisplayName()));
 }
 
 public sealed class SlotRuleCatalog
 {
     public SlotRuleCatalog(IEnumerable<SlotRule>? rules = null)
     {
-        Rules = (rules ?? CreateDefault()).ToList();
+        Rules = Normalize(rules);
     }
 
     public IReadOnlyList<SlotRule> Rules { get; }
@@ -43,6 +57,14 @@ public sealed class SlotRuleCatalog
             _ => rule.AllowedGenres
         };
         return allowed.Count == 0 || allowed.Contains(clip.Genre);
+    }
+
+    public static List<SlotRule> Normalize(IEnumerable<SlotRule>? rules)
+    {
+        var bySlot = (rules ?? []).GroupBy(rule => rule.Slot).ToDictionary(group => group.Key, group => group.First());
+        var defaults = CreateDefault().ToDictionary(rule => rule.Slot);
+        return TimeSlotInfo.All.Select(info =>
+            bySlot.TryGetValue(info.Slot, out var rule) ? rule : defaults[info.Slot]).ToList();
     }
 
     public static IReadOnlyList<SlotRule> CreateDefault()

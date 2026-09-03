@@ -19,6 +19,11 @@ public sealed class ProgrammingRules
     /// </summary>
     public bool PreferUnderPlayed { get; init; } = true;
 
+    /// <summary>
+    /// Chaque Hit validé est replacé au moins une fois dans chaque tranche du jour.
+    /// </summary>
+    public bool HitsReplayInEverySlot { get; init; } = true;
+
     public bool PreferBurkinabeUntilTarget { get; init; } = true;
 
     /// <summary>

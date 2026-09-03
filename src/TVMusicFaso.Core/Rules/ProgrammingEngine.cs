@@ -73,7 +73,7 @@ public sealed class ProgrammingEngine
 
     private static List<Clip> FilterCatalog(IReadOnlyList<Clip> library, ThematicFilter? theme)
     {
-        var catalog = library.Where(clip => clip.IsMorallyCompliant).ToList();
+        var catalog = library.Where(clip => clip.IsReadyForProgramming).ToList();
         if (theme is not null && !theme.IsEmpty)
         {
             var filtered = catalog.Where(theme.Matches).ToList();
@@ -144,7 +144,68 @@ public sealed class ProgrammingEngine
             elapsed += candidate.Duration;
         }
 
+        EnsureHitsInSlot(playlist, state);
         return playlist;
+    }
+
+    private void EnsureHitsInSlot(Playlist playlist, BucketIndex state)
+    {
+        if (!_rules.HitsReplayInEverySlot)
+        {
+            return;
+        }
+
+        foreach (var hit in state.Hits)
+        {
+            if (playlist.Items.Any(item => item.Clip.Id == hit.Id))
+            {
+                continue;
+            }
+
+            if (!TryInsertHit(playlist, hit))
+            {
+                continue;
+            }
+
+            state.Consume(hit, requeue: true);
+        }
+    }
+
+    private static bool TryInsertHit(Playlist playlist, Clip hit)
+    {
+        var start = 0;
+        while (start < playlist.Items.Count && playlist.Items[start].IsLocked)
+        {
+            start++;
+        }
+
+        var index = -1;
+        for (var i = start; i <= playlist.Items.Count; i++)
+        {
+            var previous = i > 0 ? playlist.Items[i - 1].Clip : null;
+            var next = i < playlist.Items.Count ? playlist.Items[i].Clip : null;
+            if (RespectsDiversity(hit, previous) && (next is null || RespectsDiversity(hit, next)))
+            {
+                index = i;
+            }
+        }
+
+        if (index < 0)
+        {
+            index = playlist.Items.Count;
+        }
+
+        playlist.Items.Insert(index, new PlaylistItem
+        {
+            Position = index + 1,
+            Clip = hit
+        });
+        for (var i = 0; i < playlist.Items.Count; i++)
+        {
+            playlist.Items[i].Position = i + 1;
+        }
+
+        return true;
     }
 
     private static double CombinedSovereignty(DaySchedule schedule, Playlist current)
@@ -209,7 +270,9 @@ public sealed class ProgrammingEngine
         _rules.SlotFillLimit is { } limit && limit < slotInfo.Duration ? limit : slotInfo.Duration;
 
     private int MaxPlays(Clip clip) =>
-        clip.IsPremium ? _rules.PremiumDailyPlayCap : _rules.DefaultDailyPlayCap;
+        clip.IsHit || clip.IsPremium
+            ? Math.Max(_rules.PremiumDailyPlayCap, TimeSlotInfo.All.Count)
+            : _rules.DefaultDailyPlayCap;
 
     internal static bool RespectsDiversity(Clip clip, Clip? last)
     {
@@ -218,7 +281,9 @@ public sealed class ProgrammingEngine
             return true;
         }
 
-        return clip.Language != last.Language && clip.Genre != last.Genre && clip.Id != last.Id;
+        return !string.Equals(clip.LanguageLabel, last.LanguageLabel, StringComparison.CurrentCultureIgnoreCase)
+            && clip.Genre != last.Genre
+            && clip.Id != last.Id;
     }
 
     private sealed class BucketIndex
@@ -231,6 +296,8 @@ public sealed class ProgrammingEngine
         public Dictionary<Guid, int> Remaining { get; } = [];
 
         public Dictionary<Guid, int> PlaysToday { get; } = [];
+
+        public IReadOnlyList<Clip> Hits => _catalog.Where(clip => clip.IsHit).ToList();
 
         public int ForeignBudget { get; private set; }
 
@@ -247,7 +314,9 @@ public sealed class ProgrammingEngine
 
             foreach (var clip in catalog)
             {
-                index.Remaining[clip.Id] = clip.IsPremium ? rules.PremiumDailyPlayCap : rules.DefaultDailyPlayCap;
+                index.Remaining[clip.Id] = clip.IsHit || clip.IsPremium
+                    ? Math.Max(rules.PremiumDailyPlayCap, TimeSlotInfo.All.Count)
+                    : rules.DefaultDailyPlayCap;
                 index.PlaysToday[clip.Id] = 0;
             }
 
@@ -302,7 +371,8 @@ public sealed class ProgrammingEngine
                     continue;
                 }
 
-                if (!thematic && !slots.Matches(new Clip { Genre = key.Genre, IsBurkinabe = key.IsBurkinabe }, slotInfo.Slot, day))
+                if (!thematic && !slots.Matches(new Clip { Genre = key.Genre, IsBurkinabe = key.IsBurkinabe }, slotInfo.Slot, day)
+                    && !queue.Any(clip => clip.IsHit))
                 {
                     continue;
                 }

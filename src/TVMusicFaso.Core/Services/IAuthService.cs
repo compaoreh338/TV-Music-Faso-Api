@@ -22,6 +22,16 @@ public interface IAuthService
     ProfileChangeResult UpdateProfile(UserSession session, string fullName, string userName);
 
     ProfileChangeResult ChangePassword(UserSession session, string currentPassword, string newPassword);
+
+    IReadOnlyList<AppUser> ListUsers(UserSession actor);
+
+    UserAdminResult CreateUser(UserSession actor, string fullName, string userName, string password, UserRole role);
+
+    UserAdminResult UpdateUser(UserSession actor, Guid id, string fullName, string userName, UserRole role, bool isActive);
+
+    UserAdminResult ResetPassword(UserSession actor, Guid id, string newPassword);
+
+    ImpersonationResult Impersonate(UserSession actor, Guid userId);
 }
 
 public interface IAuditLog

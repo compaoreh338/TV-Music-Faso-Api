@@ -112,7 +112,7 @@ app.MapGet("/api/dashboard", (HttpContext http, ApiComposition composition) =>
                 sovereignty = Math.Round(playlist.SovereigntyPercent, 1)
             })
         },
-        languages = library.GroupBy(clip => clip.Language.ToDisplayName())
+        languages = library.GroupBy(clip => clip.LanguageLabel)
             .OrderByDescending(group => group.Count())
             .Select(group => new { label = group.Key, count = group.Count() }),
         genres = library.GroupBy(clip => clip.Genre.ToDisplayName())
@@ -181,19 +181,73 @@ app.MapGet("/api/reports/bbda.csv", (DateOnly? from, DateOnly? to, int? year, in
     return Results.File(ExportText.GetUtf8BomBytes(csv), "text/csv", $"BBDA-{period.FileStamp}.csv");
 });
 
+app.MapGet("/api/reports/bbda.pdf", (DateOnly? from, DateOnly? to, int? year, int? month, HttpContext http, ApiComposition composition) =>
+{
+    var session = composition.CurrentSession(http);
+    if (session is null)
+    {
+        return Results.Unauthorized();
+    }
+
+    if (!session.Policy.CanExportBbda)
+    {
+        return Denied();
+    }
+
+    var period = ResolveBbdaPeriod(composition.Broadcasts, from, to, year, month);
+    if (period.Entries.Count == 0)
+    {
+        return Results.BadRequest(new { message = "Aucun passage pour cette période." });
+    }
+
+    var pdf = new BbdaReportService().ToPeriodPdf(period.Entries, period.Label);
+    composition.Audit.Write(session, "Export BBDA PDF web", period.Label);
+    return Results.File(pdf, "application/pdf", $"BBDA-{period.FileStamp}.pdf");
+});
+
 app.MapGet("/api/lookups", (HttpContext http, ApiComposition composition) =>
 {
     if (composition.CurrentSession(http) is null) return Results.Unauthorized();
     return Results.Ok(new
     {
         genres = EnumOptions<MusicalGenre>(),
-        languages = EnumOptions<ClipLanguage>(),
+        languages = composition.Languages.GetAll().Select(item => new
+        {
+            value = item.Label,
+            label = item.Label,
+            code = item.Code,
+            enumValue = item.EnumValue.ToString(),
+            languageName = item.Label
+        }),
         themes = EnumOptions<ClipTheme>(),
         audiences = EnumOptions<Audience>(),
         qualities = EnumOptions<VideoQuality>(),
         slots = EnumOptions<TimeSlot>(),
         presets = ThematicPreset.All.Select(preset => new { name = preset.Name })
     });
+});
+
+app.MapGet("/api/languages", (HttpContext http, ApiComposition composition) =>
+{
+    if (composition.CurrentSession(http) is null) return Results.Unauthorized();
+    return Results.Ok(composition.Languages.GetAll().Select(LanguageDto));
+});
+
+app.MapPost("/api/languages", (LanguageWriteRequest body, HttpContext http, ApiComposition composition) =>
+{
+    var session = composition.CurrentSession(http);
+    if (session is null) return Results.Unauthorized();
+    if (!session.Policy.CanSubmitClips) return Denied();
+    try
+    {
+        var added = composition.Languages.Add(body.Label ?? string.Empty);
+        composition.Audit.Write(session, "Ajout langue", added.Label);
+        return Results.Ok(LanguageDto(added));
+    }
+    catch (ArgumentException exception)
+    {
+        return Results.BadRequest(new { message = exception.Message });
+    }
 });
 
 app.MapGet("/api/clips.csv", (HttpContext http, ApiComposition composition) =>
@@ -207,7 +261,7 @@ app.MapPost("/api/clips/import", async (HttpContext http, ApiComposition composi
 {
     var session = composition.CurrentSession(http);
     if (session is null) return Results.Unauthorized();
-    if (!session.Policy.CanEditLibrary) return Denied();
+    if (!session.Policy.CanSubmitClips) return Denied();
     using var reader = new StreamReader(http.Request.Body);
     var csv = await reader.ReadToEndAsync();
     var imported = new LibraryCsvService().Import(csv, composition.Clips);
@@ -215,22 +269,45 @@ app.MapPost("/api/clips/import", async (HttpContext http, ApiComposition composi
     return Results.Ok(new { imported });
 });
 
+app.MapGet("/api/clips/{id:guid}/media", (Guid id, HttpContext http, ApiComposition composition) =>
+{
+    if (composition.CurrentSession(http) is null) return Results.Unauthorized();
+    var clip = composition.Clips.GetById(id);
+    if (clip is null) return Results.NotFound();
+    var path = ClipMediaPath.Resolve(clip.FilePath, composition.LibraryRoot);
+    if (path is null)
+    {
+        return Results.NotFound(new { message = "Fichier vidéo introuvable sur le serveur." });
+    }
+
+    return Results.File(path, ClipMediaPath.ContentType(path), enableRangeProcessing: true);
+});
+
 app.MapGet("/api/clips", (string? q, string? genre, string? language, bool? burkinabeOnly, HttpContext http, ApiComposition composition) =>
 {
     if (composition.CurrentSession(http) is null) return Results.Unauthorized();
     MusicalGenre? g = Enum.TryParse<MusicalGenre>(genre, out var parsedGenre) ? parsedGenre : null;
-    ClipLanguage? l = Enum.TryParse<ClipLanguage>(language, out var parsedLang) ? parsedLang : null;
-    return Results.Ok(composition.Clips.Search(q, g, l, burkinabeOnly).Select(ClipDto));
+    var clips = composition.Clips.Search(q, g, null, burkinabeOnly);
+    if (!string.IsNullOrWhiteSpace(language))
+    {
+        clips = clips.Where(clip =>
+            string.Equals(clip.LanguageLabel, language, StringComparison.CurrentCultureIgnoreCase)
+            || string.Equals(clip.Language.ToString(), language, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+    }
+
+    return Results.Ok(clips.Select(ClipDto));
 });
 
 app.MapPost("/api/clips", (ClipWriteRequest body, HttpContext http, ApiComposition composition) =>
 {
     var session = composition.CurrentSession(http);
     if (session is null) return Results.Unauthorized();
-    if (!session.Policy.CanEditLibrary) return Denied();
+    if (!session.Policy.CanSubmitClips) return Denied();
     var clip = body.ToClip(body.Id);
+    clip.SubmitForValidation();
     composition.Clips.Add(clip);
-    composition.Audit.Write(session, "Création clip", clip.Title);
+    composition.Audit.Write(session, "Création clip", $"{clip.Title} (à valider)");
     return Results.Created($"/api/clips/{clip.Id}", ClipDto(clip));
 });
 
@@ -238,21 +315,46 @@ app.MapPut("/api/clips/{id:guid}", (Guid id, ClipWriteRequest body, HttpContext 
 {
     var session = composition.CurrentSession(http);
     if (session is null) return Results.Unauthorized();
-    if (!session.Policy.CanEditLibrary) return Denied();
+    if (!session.Policy.CanSubmitClips) return Denied();
     var existing = composition.Clips.GetById(id);
     if (existing is null) return Results.NotFound();
     var clip = body.ToClip(id);
     clip.LifetimePlayCount = existing.LifetimePlayCount;
+    clip.SubmitForValidation();
     composition.Clips.Update(clip);
-    composition.Audit.Write(session, "Édition clip", clip.Title);
+    composition.Audit.Write(session, "Édition clip", $"{clip.Title} (à valider)");
     return Results.Ok(ClipDto(clip));
+});
+
+app.MapPut("/api/clips/{id:guid}/validate", (Guid id, HttpContext http, ApiComposition composition) =>
+{
+    var session = composition.CurrentSession(http);
+    if (session is null) return Results.Unauthorized();
+    if (!session.Policy.CanValidateClips) return Denied();
+    var existing = composition.Clips.GetById(id);
+    if (existing is null) return Results.NotFound();
+    composition.Clips.SetValidation(id, ClipValidationStatus.Validated);
+    composition.Audit.Write(session, "Validation clip", existing.Title);
+    return Results.Ok(ClipDto(composition.Clips.GetById(id)!));
+});
+
+app.MapPut("/api/clips/{id:guid}/reject", (Guid id, ClipValidationRequest body, HttpContext http, ApiComposition composition) =>
+{
+    var session = composition.CurrentSession(http);
+    if (session is null) return Results.Unauthorized();
+    if (!session.Policy.CanValidateClips) return Denied();
+    var existing = composition.Clips.GetById(id);
+    if (existing is null) return Results.NotFound();
+    composition.Clips.SetValidation(id, ClipValidationStatus.Rejected, body.Note);
+    composition.Audit.Write(session, "Refus clip", existing.Title);
+    return Results.Ok(ClipDto(composition.Clips.GetById(id)!));
 });
 
 app.MapDelete("/api/clips/{id:guid}", (Guid id, HttpContext http, ApiComposition composition) =>
 {
     var session = composition.CurrentSession(http);
     if (session is null) return Results.Unauthorized();
-    if (!session.Policy.CanEditLibrary) return Denied();
+    if (!session.Policy.CanSubmitClips) return Denied();
     composition.Clips.Remove(id);
     composition.Audit.Write(session, "Suppression clip", id.ToString());
     return Results.NoContent();
@@ -473,6 +575,83 @@ app.MapPut("/api/account/password", (PasswordRequest body, HttpContext http, Api
     return result.Ok ? Results.Ok(new { message = result.Message }) : Results.BadRequest(new { message = result.Message });
 });
 
+app.MapGet("/api/users", (HttpContext http, ApiComposition composition) =>
+{
+    var session = composition.CurrentSession(http);
+    if (session is null) return Results.Unauthorized();
+    if (!session.Policy.CanManageUsers) return Denied();
+    return Results.Ok(composition.Auth.ListUsers(session).Select(UserDto));
+});
+
+app.MapPost("/api/users/{id:guid}/impersonate", (Guid id, HttpContext http, ApiComposition composition) =>
+{
+    var session = composition.CurrentSession(http);
+    if (session is null) return Results.Unauthorized();
+    var result = composition.Auth.Impersonate(session, id);
+    if (!result.Ok || result.Session is null)
+    {
+        return Results.BadRequest(new { message = result.Message });
+    }
+
+    composition.Audit.Write(session, "Emprunt d’identité", result.Message);
+    return Results.Ok(ToSessionDto(result.Session));
+});
+
+app.MapPost("/api/users", (UserWriteRequest body, HttpContext http, ApiComposition composition) =>
+{
+    var session = composition.CurrentSession(http);
+    if (session is null) return Results.Unauthorized();
+    if (!session.Policy.CanManageUsers) return Denied();
+    if (!UserAdmin.TryParseRole(body.Role, out var role))
+    {
+        return Results.BadRequest(new { message = "Rôle inconnu. Utilisez Programmateur, Technicien ou Direction." });
+    }
+
+    var result = composition.Auth.CreateUser(session, body.FullName ?? "", body.UserName ?? "", body.Password ?? "", role);
+    if (!result.Ok)
+    {
+        return Results.BadRequest(new { message = result.Message });
+    }
+
+    composition.Audit.Write(session, "Utilisateur", result.Message);
+    return Results.Ok(new { message = result.Message });
+});
+
+app.MapPut("/api/users/{id:guid}", (Guid id, UserWriteRequest body, HttpContext http, ApiComposition composition) =>
+{
+    var session = composition.CurrentSession(http);
+    if (session is null) return Results.Unauthorized();
+    if (!session.Policy.CanManageUsers) return Denied();
+    if (!UserAdmin.TryParseRole(body.Role, out var role))
+    {
+        return Results.BadRequest(new { message = "Rôle inconnu. Utilisez Programmateur, Technicien ou Direction." });
+    }
+
+    var result = composition.Auth.UpdateUser(session, id, body.FullName ?? "", body.UserName ?? "", role, body.IsActive ?? true);
+    if (!result.Ok)
+    {
+        return Results.BadRequest(new { message = result.Message });
+    }
+
+    composition.Audit.Write(session, "Utilisateur", result.Message);
+    return Results.Ok(new { message = result.Message });
+});
+
+app.MapPut("/api/users/{id:guid}/password", (Guid id, UserPasswordRequest body, HttpContext http, ApiComposition composition) =>
+{
+    var session = composition.CurrentSession(http);
+    if (session is null) return Results.Unauthorized();
+    if (!session.Policy.CanManageUsers) return Denied();
+    var result = composition.Auth.ResetPassword(session, id, body.Password ?? "");
+    if (!result.Ok)
+    {
+        return Results.BadRequest(new { message = result.Message });
+    }
+
+    composition.Audit.Write(session, "Utilisateur", $"Mot de passe réinitialisé pour {id}");
+    return Results.Ok(new { message = result.Message });
+});
+
 app.MapFallback("/api/{**rest}", () =>
     Results.Json(new { message = "Route API inconnue." }, statusCode: 404));
 app.Run();
@@ -521,6 +700,15 @@ static (IReadOnlyList<BroadcastLogEntry> Entries, DateOnly From, DateOnly To, in
 static object[] EnumOptions<T>() where T : struct, Enum =>
     Enum.GetValues<T>().Select(value => new { value = value.ToString(), label = value.ToDisplayName() }).ToArray<object>();
 
+static object LanguageDto(SpokenLanguage language) => new
+{
+    id = language.Id,
+    code = language.Code,
+    label = language.Label,
+    enumValue = language.EnumValue.ToString(),
+    isSeeded = language.IsSeeded
+};
+
 static object ClipDto(Clip clip) => new
 {
     id = clip.Id,
@@ -537,7 +725,8 @@ static object ClipDto(Clip clip) => new
     genre = clip.Genre.ToString(),
     genreLabel = clip.Genre.ToDisplayName(),
     language = clip.Language.ToString(),
-    languageLabel = clip.Language.ToDisplayName(),
+    languageName = clip.LanguageName,
+    languageLabel = clip.LanguageLabel,
     theme = clip.Theme.ToString(),
     themeLabel = clip.Theme.ToDisplayName(),
     audience = clip.Audience.ToString(),
@@ -546,11 +735,16 @@ static object ClipDto(Clip clip) => new
     impactLabel = clip.ImpactLabel,
     originLabel = clip.OriginLabel,
     isPremium = clip.IsPremium,
+    isHit = clip.IsHit,
     isMorallyCompliant = clip.IsMorallyCompliant,
     filePath = clip.FilePath,
     committeeRating = clip.CommitteeRating,
     popularityScore = clip.PopularityScore,
-    socialScore = clip.SocialScore
+    socialScore = clip.SocialScore,
+    validationStatus = clip.ValidationStatus.ToString(),
+    validationLabel = clip.ValidationLabel,
+    validationNote = clip.ValidationNote,
+    isValidated = clip.IsValidated
 };
 
 static object ScheduleDto(DaySchedule? schedule, DateOnly date) => new
@@ -588,7 +782,22 @@ static object ToSessionDto(UserSession session) => new
     canViewReports = session.Policy.CanViewReports,
     canExportBbda = session.Policy.CanExportBbda,
     canManageBackup = session.Policy.CanManageBackup,
-    consultationOnly = session.Policy.IsConsultationOnly
+    canManageUsers = session.Policy.CanManageUsers,
+    canSubmitClips = session.Policy.CanSubmitClips,
+    canValidateClips = session.Policy.CanValidateClips,
+    consultationOnly = session.Policy.IsConsultationOnly,
+    isImpersonating = session.IsImpersonating,
+    impersonatedBy = session.ImpersonatedBy?.FullName
+};
+
+static object UserDto(AppUser user) => new
+{
+    id = user.Id,
+    fullName = user.FullName,
+    userName = user.UserName,
+    role = user.Role.ToDisplayName(),
+    roleKey = user.Role.ToString(),
+    isActive = user.IsActive
 };
 
 public sealed record LoginRequest(string? UserName, string? Password);
@@ -599,6 +808,10 @@ public sealed record SavePlaylistRequest(string? Slot, List<SaveItemRequest>? It
 public sealed record SaveItemRequest(Guid ClipId, bool IsLocked);
 public sealed record ProfileRequest(string? FullName, string? UserName);
 public sealed record PasswordRequest(string? CurrentPassword, string? NewPassword);
+public sealed record UserWriteRequest(string? FullName, string? UserName, string? Password, string? Role, bool? IsActive);
+public sealed record UserPasswordRequest(string? Password);
+public sealed record ClipValidationRequest(string? Note);
+public sealed record LanguageWriteRequest(string? Label);
 public sealed record ClipWriteRequest(
     Guid? Id,
     string? Title,
@@ -612,6 +825,7 @@ public sealed record ClipWriteRequest(
     int? DurationSeconds,
     string? Genre,
     string? Language,
+    string? LanguageName,
     string? Theme,
     string? Audience,
     decimal? CommitteeRating,
@@ -640,7 +854,10 @@ public sealed record ClipWriteRequest(
             Format = string.IsNullOrWhiteSpace(Format) ? "MP4" : Format,
             Duration = TimeSpan.FromSeconds(DurationSeconds ?? 180),
             Genre = Enum.TryParse<MusicalGenre>(Genre, out var genre) ? genre : MusicalGenre.AfroPop,
-            Language = Enum.TryParse<ClipLanguage>(Language, out var language) ? language : ClipLanguage.Moore,
+            Language = LanguageCatalog.MapEnum(LanguageName ?? Language),
+            LanguageName = string.IsNullOrWhiteSpace(LanguageName)
+                ? LanguageCatalog.LabelFor(LanguageCatalog.MapEnum(LanguageName ?? Language))
+                : LanguageName.Trim(),
             Theme = Enum.TryParse<ClipTheme>(Theme, out var theme) ? theme : ClipTheme.Amour,
             Audience = Enum.TryParse<Audience>(Audience, out var parsedAudience)
                 ? parsedAudience

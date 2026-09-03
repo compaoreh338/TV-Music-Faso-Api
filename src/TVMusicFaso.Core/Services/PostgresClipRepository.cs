@@ -45,6 +45,9 @@ public sealed class PostgresClipRepository : IClipRepository
         command.ExecuteNonQuery();
     }
 
+    public void SetValidation(Guid id, ClipValidationStatus status, string? note = null) =>
+        ClipValidation.Apply(this, id, status, note);
+
     public IReadOnlyList<Clip> Search(string? query, MusicalGenre? genre, ClipLanguage? language, bool? burkinabeOnly) =>
         Query(
             """
@@ -111,6 +114,9 @@ public sealed class PostgresClipRepository : IClipRepository
         command.Parameters.AddWithValue("duration_ticks", clip.Duration.Ticks);
         command.Parameters.AddWithValue("genre", (int)clip.Genre);
         command.Parameters.AddWithValue("language", (int)clip.Language);
+        command.Parameters.AddWithValue("language_name", string.IsNullOrWhiteSpace(clip.LanguageName)
+            ? LanguageCatalog.LabelFor(clip.Language)
+            : clip.LanguageName);
         command.Parameters.AddWithValue("theme", (int)clip.Theme);
         command.Parameters.AddWithValue("audience", (int)clip.Audience);
         command.Parameters.AddWithValue("impact_score", clip.ImpactScore);
@@ -124,6 +130,8 @@ public sealed class PostgresClipRepository : IClipRepository
         command.Parameters.AddWithValue("thumbnail_path", clip.ThumbnailPath);
         command.Parameters.AddWithValue("broadcast_failure_count", clip.BroadcastFailureCount);
         command.Parameters.AddWithValue("last_broadcast_failure_note", clip.LastBroadcastFailureNote);
+        command.Parameters.AddWithValue("validation_status", (int)clip.ValidationStatus);
+        command.Parameters.AddWithValue("validation_note", clip.ValidationNote);
         command.ExecuteNonQuery();
     }
 
@@ -147,6 +155,7 @@ public sealed class PostgresClipRepository : IClipRepository
             Duration = TimeSpan.FromTicks(reader.GetInt64(reader.GetOrdinal("duration_ticks"))),
             Genre = (MusicalGenre)reader.GetInt32(reader.GetOrdinal("genre")),
             Language = (ClipLanguage)reader.GetInt32(reader.GetOrdinal("language")),
+            LanguageName = ReadOptionalString(reader, "language_name"),
             Theme = (ClipTheme)reader.GetInt32(reader.GetOrdinal("theme")),
             Audience = (Audience)reader.GetInt32(reader.GetOrdinal("audience")),
             ImpactScore = reader.GetDecimal(reader.GetOrdinal("impact_score")),
@@ -159,21 +168,50 @@ public sealed class PostgresClipRepository : IClipRepository
             SocialScore = reader.GetDecimal(reader.GetOrdinal("social_score")),
             ThumbnailPath = reader.GetString(reader.GetOrdinal("thumbnail_path")),
             BroadcastFailureCount = reader.GetInt32(reader.GetOrdinal("broadcast_failure_count")),
-            LastBroadcastFailureNote = reader.GetString(reader.GetOrdinal("last_broadcast_failure_note"))
+            LastBroadcastFailureNote = reader.GetString(reader.GetOrdinal("last_broadcast_failure_note")),
+            ValidationStatus = ReadValidation(reader),
+            ValidationNote = ReadOptionalString(reader, "validation_note")
         };
+
+    private static ClipValidationStatus ReadValidation(NpgsqlDataReader reader)
+    {
+        try
+        {
+            return (ClipValidationStatus)reader.GetInt32(reader.GetOrdinal("validation_status"));
+        }
+        catch (IndexOutOfRangeException)
+        {
+            return ClipValidationStatus.Validated;
+        }
+    }
+
+    private static string ReadOptionalString(NpgsqlDataReader reader, string column)
+    {
+        try
+        {
+            var ordinal = reader.GetOrdinal(column);
+            return reader.IsDBNull(ordinal) ? string.Empty : reader.GetString(ordinal);
+        }
+        catch (IndexOutOfRangeException)
+        {
+            return string.Empty;
+        }
+    }
 
     private const string InsertSql =
         """
         INSERT INTO clips (
             id, title, artist, year, origin_place, filming_location, is_burkinabe, quality, format,
-            duration_ticks, genre, language, theme, audience, impact_score, is_premium,
+            duration_ticks, genre, language, language_name, theme, audience, impact_score, is_premium,
             is_morally_compliant, file_path, lifetime_play_count, committee_rating, popularity_score,
-            social_score, thumbnail_path, broadcast_failure_count, last_broadcast_failure_note)
+            social_score, thumbnail_path, broadcast_failure_count, last_broadcast_failure_note,
+            validation_status, validation_note)
         VALUES (
             @id, @title, @artist, @year, @origin_place, @filming_location, @is_burkinabe, @quality, @format,
-            @duration_ticks, @genre, @language, @theme, @audience, @impact_score, @is_premium,
+            @duration_ticks, @genre, @language, @language_name, @theme, @audience, @impact_score, @is_premium,
             @is_morally_compliant, @file_path, @lifetime_play_count, @committee_rating, @popularity_score,
-            @social_score, @thumbnail_path, @broadcast_failure_count, @last_broadcast_failure_note);
+            @social_score, @thumbnail_path, @broadcast_failure_count, @last_broadcast_failure_note,
+            @validation_status, @validation_note);
         """;
 
     private const string UpdateSql =
@@ -182,12 +220,14 @@ public sealed class PostgresClipRepository : IClipRepository
             title = @title, artist = @artist, year = @year, origin_place = @origin_place,
             filming_location = @filming_location, is_burkinabe = @is_burkinabe, quality = @quality,
             format = @format, duration_ticks = @duration_ticks, genre = @genre, language = @language,
+            language_name = @language_name,
             theme = @theme, audience = @audience, impact_score = @impact_score, is_premium = @is_premium,
             is_morally_compliant = @is_morally_compliant, file_path = @file_path,
             lifetime_play_count = @lifetime_play_count, committee_rating = @committee_rating,
             popularity_score = @popularity_score, social_score = @social_score,
             thumbnail_path = @thumbnail_path, broadcast_failure_count = @broadcast_failure_count,
-            last_broadcast_failure_note = @last_broadcast_failure_note
+            last_broadcast_failure_note = @last_broadcast_failure_note,
+            validation_status = @validation_status, validation_note = @validation_note
         WHERE id = @id;
         """;
 }

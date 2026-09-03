@@ -38,6 +38,9 @@ public sealed class InMemoryClipRepository : IClipRepository
         _clips.RemoveAll(clip => clip.Id == id);
     }
 
+    public void SetValidation(Guid id, ClipValidationStatus status, string? note = null) =>
+        ClipValidation.Apply(this, id, status, note);
+
     public IReadOnlyList<Clip> Search(string? query, MusicalGenre? genre, ClipLanguage? language, bool? burkinabeOnly) =>
         ClipQuery.Filter(_clips, query, genre, language, burkinabeOnly);
 }

@@ -20,6 +20,10 @@ public sealed class AppUser
     public UserRole Role { get; set; } = UserRole.Programmateur;
 
     public bool IsActive { get; set; } = true;
+
+    public string RoleLabel => Role.ToDisplayName();
+
+    public string StatusLabel => IsActive ? "Actif" : "Inactif";
 }
 
 public sealed class UserSession
@@ -32,11 +36,17 @@ public sealed class UserSession
 
     public bool IsOffline { get; init; }
 
+    public AppUser? ImpersonatedBy { get; init; }
+
+    public bool IsImpersonating => ImpersonatedBy is not null;
+
     public AccessPolicy Policy => new(User.Role);
 
     public string TokenPreview => AccessToken.Length <= 10 ? AccessToken : $"{AccessToken[..8]}…";
 
-    public string DisplayName => $"{User.FullName} · {User.Role.ToDisplayName()}";
+    public string DisplayName => IsImpersonating
+        ? $"{User.FullName} · {User.Role.ToDisplayName()} (via {ImpersonatedBy!.FullName})"
+        : $"{User.FullName} · {User.Role.ToDisplayName()}";
 }
 
 public sealed class AccessPolicy
@@ -53,6 +63,10 @@ public sealed class AccessPolicy
 
     public bool CanEditLibrary => !ForceConsultation && Role == UserRole.Programmateur;
 
+    public bool CanSubmitClips => !ForceConsultation && Role is UserRole.Programmateur or UserRole.Technicien;
+
+    public bool CanValidateClips => !ForceConsultation && Role == UserRole.Direction;
+
     public bool CanEditPlaylists => !ForceConsultation && Role == UserRole.Programmateur;
 
     public bool CanViewDashboard => true;
@@ -67,7 +81,11 @@ public sealed class AccessPolicy
 
     public bool CanViewAudit => true;
 
-    public bool IsConsultationOnly => !CanEditLibrary && !CanEditPlaylists;
+    public bool CanManageUsers => !ForceConsultation && Role == UserRole.Direction;
+
+    public bool CanManageSlots => !ForceConsultation && Role is UserRole.Programmateur or UserRole.Direction;
+
+    public bool IsConsultationOnly => !CanEditLibrary && !CanEditPlaylists && !CanManageUsers && !CanManageSlots;
 }
 
 public sealed class AuditEntry

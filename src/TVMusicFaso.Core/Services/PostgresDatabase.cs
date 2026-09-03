@@ -59,7 +59,9 @@ public static class PostgresDatabase
                 social_score NUMERIC NOT NULL DEFAULT 3,
                 thumbnail_path TEXT NOT NULL DEFAULT '',
                 broadcast_failure_count INTEGER NOT NULL DEFAULT 0,
-                last_broadcast_failure_note TEXT NOT NULL DEFAULT ''
+                last_broadcast_failure_note TEXT NOT NULL DEFAULT '',
+                validation_status INTEGER NOT NULL DEFAULT 1,
+                validation_note TEXT NOT NULL DEFAULT ''
             );
             CREATE INDEX IF NOT EXISTS idx_clips_language ON clips (language);
             CREATE INDEX IF NOT EXISTS idx_clips_genre ON clips (genre);
@@ -114,6 +116,19 @@ public static class PostgresDatabase
                 details TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_audit_logs_at ON audit_logs (at DESC);
+
+            CREATE TABLE IF NOT EXISTS languages (
+                id UUID PRIMARY KEY,
+                code TEXT NOT NULL UNIQUE,
+                label TEXT NOT NULL,
+                enum_value INTEGER NOT NULL,
+                is_seeded BOOLEAN NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_languages_label ON languages (label);
+
+            ALTER TABLE clips ADD COLUMN IF NOT EXISTS validation_status INTEGER NOT NULL DEFAULT 1;
+            ALTER TABLE clips ADD COLUMN IF NOT EXISTS validation_note TEXT NOT NULL DEFAULT '';
+            ALTER TABLE clips ADD COLUMN IF NOT EXISTS language_name TEXT NOT NULL DEFAULT '';
             """,
             connection);
         command.ExecuteNonQuery();
@@ -131,8 +146,32 @@ public static class PostgresDatabase
             }
         }
 
+        InstallSeeder.SeedLanguages(new PostgresLanguageCatalog(connectionString));
+
         var clips = new PostgresClipRepository(connectionString);
-        clips.EnsureInitialized(SeedData.CreateLibrary());
+        clips.EnsureInitialized(InstallSeeder.SeededLibrary());
+        BackfillLanguageNames(connection);
+    }
+
+    private static void BackfillLanguageNames(NpgsqlConnection connection)
+    {
+        foreach (var seed in LanguageCatalog.BurkinaAndFrench)
+        {
+            using var command = new NpgsqlCommand(
+                """
+                UPDATE clips SET language_name = @label
+                WHERE language_name = '' AND language = @enum;
+                """,
+                connection);
+            command.Parameters.AddWithValue("label", seed.Label);
+            command.Parameters.AddWithValue("enum", (int)seed.EnumValue);
+            command.ExecuteNonQuery();
+        }
+
+        using var fallback = new NpgsqlCommand(
+            "UPDATE clips SET language_name = 'Autre' WHERE language_name = '';",
+            connection);
+        fallback.ExecuteNonQuery();
     }
 
     private static void InsertUser(

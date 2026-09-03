@@ -22,6 +22,22 @@ public sealed class Playlist
     public TimeSpan TotalDuration =>
         Items.Aggregate(TimeSpan.Zero, (sum, item) => sum + item.Clip.Duration);
 
+    public TimeSpan SlotDuration => TimeSlotInfo.For(Slot).Duration;
+
+    public TimeSpan RemainingDuration
+    {
+        get
+        {
+            var left = SlotDuration - TotalDuration;
+            return left < TimeSpan.Zero ? TimeSpan.Zero : left;
+        }
+    }
+
+    public bool Fits(Clip clip) => TotalDuration + clip.Duration <= SlotDuration;
+
+    public bool FitsReplacement(Clip outgoing, Clip incoming) =>
+        TotalDuration - outgoing.Duration + incoming.Duration <= SlotDuration;
+
     public double SovereigntyPercent
     {
         get
