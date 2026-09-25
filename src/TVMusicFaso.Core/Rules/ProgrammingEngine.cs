@@ -114,6 +114,9 @@ public sealed class ProgrammingEngine
             state.Consume(locked.Clip, requeue: false);
         }
 
+        // Hits compatibles genre d'abord, pour garantir un passage avant le remplissage.
+        EnsureHitsInSlot(playlist, state);
+
         var elapsed = playlist.TotalDuration;
         var target = TargetDuration(slotInfo);
         var safety = 0;
@@ -148,6 +151,14 @@ public sealed class ProgrammingEngine
                 break;
             }
 
+            // Les Hits suivent les genres de la tranche et leur plafond quotidien.
+            if (candidate.IsHit
+                && (!_slots.Matches(candidate, slotInfo.Slot, date.DayOfWeek)
+                    || state.Remaining.GetValueOrDefault(candidate.Id) <= 0))
+            {
+                continue;
+            }
+
             // Prefer fitting the remaining window; otherwise allow a slight overshoot
             // within the slot capacity so short remainders don't leave empty holes.
             if (candidate.Duration > remaining && !playlist.Fits(candidate))
@@ -164,7 +175,6 @@ public sealed class ProgrammingEngine
             elapsed += candidate.Duration;
         }
 
-        EnsureHitsInSlot(playlist, state);
         return playlist;
     }
 
@@ -177,6 +187,16 @@ public sealed class ProgrammingEngine
 
         foreach (var hit in state.Hits)
         {
+            if (!_slots.Matches(hit, playlist.Slot, playlist.Date.DayOfWeek))
+            {
+                continue;
+            }
+
+            if (state.Remaining.GetValueOrDefault(hit.Id) <= 0)
+            {
+                continue;
+            }
+
             if (playlist.Items.Any(item => item.Clip.Id == hit.Id))
             {
                 continue;
@@ -297,7 +317,7 @@ public sealed class ProgrammingEngine
 
     private int MaxPlays(Clip clip) =>
         clip.IsHit || clip.IsPremium
-            ? Math.Max(_rules.PremiumDailyPlayCap, TimeSlotInfo.All.Count)
+            ? _rules.PremiumDailyPlayCap
             : _rules.DefaultDailyPlayCap;
 
     internal static bool RespectsDiversity(Clip clip, Clip? last)
@@ -347,7 +367,7 @@ public sealed class ProgrammingEngine
             foreach (var clip in catalog)
             {
                 index.Remaining[clip.Id] = clip.IsHit || clip.IsPremium
-                    ? Math.Max(rules.PremiumDailyPlayCap, Math.Max(1, slots.Count))
+                    ? rules.PremiumDailyPlayCap
                     : rules.DefaultDailyPlayCap;
                 index.PlaysToday[clip.Id] = 0;
             }
@@ -404,8 +424,7 @@ public sealed class ProgrammingEngine
                     continue;
                 }
 
-                if (!thematic && !slots.Matches(new Clip { Genre = key.Genre, IsBurkinabe = key.IsBurkinabe }, slotInfo.Slot, day)
-                    && !queue.Any(clip => clip.IsHit))
+                if (!thematic && !slots.Matches(new Clip { Genre = key.Genre, IsBurkinabe = key.IsBurkinabe }, slotInfo.Slot, day))
                 {
                     continue;
                 }
@@ -416,7 +435,10 @@ public sealed class ProgrammingEngine
                 {
                     var head = queue.Peek();
                     var remaining = Remaining.GetValueOrDefault(head.Id);
-                    var playOk = ignorePlayCap || remaining > 0;
+                    // Les Hits gardent toujours leur plafond quotidien (jamais en mode ignorePlayCap).
+                    var playOk = head.IsHit
+                        ? remaining > 0
+                        : ignorePlayCap || remaining > 0;
                     var notRepeat = last is null || head.Id != last.Id;
                     var diversityOk = relaxDiversity || !rules.EnforceCulturalDiversity || RespectsDiversity(head, last);
                     var durationOk = maxDuration is null || head.Duration <= maxDuration;

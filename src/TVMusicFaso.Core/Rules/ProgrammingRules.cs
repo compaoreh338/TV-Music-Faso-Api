@@ -20,7 +20,8 @@ public sealed class ProgrammingRules
     public bool PreferUnderPlayed { get; init; } = true;
 
     /// <summary>
-    /// Chaque Hit validé est replacé au moins une fois dans chaque tranche du jour.
+    /// Chaque Hit validé est replacé au moins une fois dans chaque tranche
+    /// dont les genres autorisés (jour courant) correspondent au genre du Hit.
     /// </summary>
     public bool HitsReplayInEverySlot { get; init; } = true;
 
