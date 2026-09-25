@@ -28,10 +28,11 @@ public sealed class ProgrammingEngine
         ArgumentNullException.ThrowIfNull(library);
 
         var catalog = FilterCatalog(library, theme);
-        var state = BucketIndex.Build(catalog, date, _rules, _random);
+        var activeSlots = _slots.ActiveSlots;
+        var state = BucketIndex.Build(catalog, date, _rules, _random, activeSlots);
         var schedule = new DaySchedule { Date = date };
 
-        foreach (var slotInfo in TimeSlotInfo.All)
+        foreach (var slotInfo in activeSlots)
         {
             var locked = existing?.Playlists
                 .FirstOrDefault(playlist => playlist.Slot == slotInfo.Slot)
@@ -54,7 +55,7 @@ public sealed class ProgrammingEngine
         IReadOnlyList<PlaylistItem>? lockedItems = null)
     {
         var catalog = FilterCatalog(library, theme);
-        var state = BucketIndex.Build(catalog, date, _rules, _random);
+        var state = BucketIndex.Build(catalog, date, _rules, _random, _slots.ActiveSlots);
         foreach (var (id, plays) in playsToday)
         {
             var clip = catalog.FirstOrDefault(item => item.Id == id);
@@ -83,7 +84,7 @@ public sealed class ProgrammingEngine
             }
         }
 
-        return catalog.Count > 0 ? catalog : library.ToList();
+        return catalog;
     }
 
     private Playlist FillSlot(
@@ -95,7 +96,13 @@ public sealed class ProgrammingEngine
         DaySchedule schedule,
         double? sovereigntyOverride = null)
     {
-        var playlist = new Playlist { Slot = slotInfo.Slot, Date = date };
+        var playlist = new Playlist
+        {
+            Slot = slotInfo.Slot,
+            Date = date,
+            StartOverride = slotInfo.Start,
+            DurationOverride = slotInfo.Duration
+        };
         foreach (var locked in lockedItems.OrderBy(item => item.Position))
         {
             playlist.Items.Add(new PlaylistItem
@@ -116,23 +123,36 @@ public sealed class ProgrammingEngine
         while (elapsed < target && safety < maxAttempts)
         {
             safety++;
+            var remaining = target - elapsed;
+            if (remaining <= TimeSpan.Zero)
+            {
+                break;
+            }
+
             var last = playlist.Items.LastOrDefault()?.Clip;
             var daySovereignty = sovereigntyOverride
                 ?? CombinedSovereignty(schedule, playlist);
             var requireBurkinabe = _rules.PreferBurkinabeUntilTarget
                 && (daySovereignty < ProgrammingRules.SovereigntyTargetPercent || state.ForeignBudget <= 0);
             var candidate =
-                state.Pick(slotInfo, date.DayOfWeek, last, thematic, _slots, _rules, requireBurkinabe, false, false)
-                ?? state.Pick(slotInfo, date.DayOfWeek, last, thematic, _slots, _rules, requireBurkinabe, true, false)
-                ?? state.Pick(slotInfo, date.DayOfWeek, last, thematic, _slots, _rules, requireBurkinabe, false, true)
-                ?? state.Pick(slotInfo, date.DayOfWeek, last, thematic, _slots, _rules, requireBurkinabe, true, true)
-                ?? state.Pick(slotInfo, date.DayOfWeek, last, thematic, _slots, _rules, false, true, true)
-                ?? state.Pick(slotInfo, date.DayOfWeek, last, thematic: true, _slots, _rules, false, true, true)
-                ?? state.AnyEligible(last);
+                state.Pick(slotInfo, date.DayOfWeek, last, thematic, _slots, _rules, requireBurkinabe, false, false, remaining)
+                ?? state.Pick(slotInfo, date.DayOfWeek, last, thematic, _slots, _rules, requireBurkinabe, true, false, remaining)
+                ?? state.Pick(slotInfo, date.DayOfWeek, last, thematic, _slots, _rules, requireBurkinabe, false, true, remaining)
+                ?? state.Pick(slotInfo, date.DayOfWeek, last, thematic, _slots, _rules, requireBurkinabe, true, true, remaining)
+                ?? state.Pick(slotInfo, date.DayOfWeek, last, thematic, _slots, _rules, false, true, true, remaining)
+                ?? state.Pick(slotInfo, date.DayOfWeek, last, thematic: true, _slots, _rules, false, true, true, remaining)
+                ?? state.AnyEligible(last, remaining);
 
             if (candidate is null)
             {
                 break;
+            }
+
+            // Prefer fitting the remaining window; otherwise allow a slight overshoot
+            // within the slot capacity so short remainders don't leave empty holes.
+            if (candidate.Duration > remaining && !playlist.Fits(candidate))
+            {
+                continue;
             }
 
             playlist.Items.Add(new PlaylistItem
@@ -173,6 +193,11 @@ public sealed class ProgrammingEngine
 
     private static bool TryInsertHit(Playlist playlist, Clip hit)
     {
+        if (!playlist.Fits(hit))
+        {
+            return false;
+        }
+
         var start = 0;
         while (start < playlist.Items.Count && playlist.Items[start].IsLocked)
         {
@@ -255,7 +280,8 @@ public sealed class ProgrammingEngine
                     ?? state.AnyBurkinabe(previous, next, relaxDiversity: true);
             }
 
-            if (replacement is null || !replacement.IsBurkinabe)
+            if (replacement is null || !replacement.IsBurkinabe
+                || !foreign.playlist.FitsReplacement(foreign.item.Clip, replacement))
             {
                 skipped.Add(foreign.item);
                 continue;
@@ -301,8 +327,14 @@ public sealed class ProgrammingEngine
 
         public int ForeignBudget { get; private set; }
 
-        public static BucketIndex Build(IReadOnlyList<Clip> catalog, DateOnly date, ProgrammingRules rules, Random random)
+        public static BucketIndex Build(
+            IReadOnlyList<Clip> catalog,
+            DateOnly date,
+            ProgrammingRules rules,
+            Random random,
+            IReadOnlyList<TimeSlotInfo>? activeSlots = null)
         {
+            var slots = activeSlots is { Count: > 0 } ? activeSlots : TimeSlotInfo.All;
             var index = new BucketIndex();
             index._catalog.AddRange(catalog);
             foreach (var group in catalog.GroupBy(clip => new BucketKey(clip.IsBurkinabe, clip.Genre)))
@@ -315,13 +347,13 @@ public sealed class ProgrammingEngine
             foreach (var clip in catalog)
             {
                 index.Remaining[clip.Id] = clip.IsHit || clip.IsPremium
-                    ? Math.Max(rules.PremiumDailyPlayCap, TimeSlotInfo.All.Count)
+                    ? Math.Max(rules.PremiumDailyPlayCap, Math.Max(1, slots.Count))
                     : rules.DefaultDailyPlayCap;
                 index.PlaysToday[clip.Id] = 0;
             }
 
             var averageTicks = catalog.Count == 0 ? TimeSpan.FromMinutes(3).Ticks : catalog.Average(clip => clip.Duration.Ticks);
-            var dayTicks = TimeSlotInfo.All.Sum(slot => (rules.SlotFillLimit is { } limit && limit < slot.Duration ? limit : slot.Duration).Ticks);
+            var dayTicks = slots.Sum(slot => (rules.SlotFillLimit is { } limit && limit < slot.Duration ? limit : slot.Duration).Ticks);
             var estimated = (int)Math.Max(1, dayTicks / Math.Max(1, averageTicks));
             index.ForeignBudget = (int)Math.Floor(0.10 * estimated);
             return index;
@@ -356,7 +388,8 @@ public sealed class ProgrammingEngine
             ProgrammingRules rules,
             bool requireBurkinabe,
             bool relaxDiversity,
-            bool ignorePlayCap)
+            bool ignorePlayCap,
+            TimeSpan? maxDuration = null)
         {
             var scored = new List<(Clip Clip, Queue<Clip> Queue, BucketKey Key, double Score)>();
             foreach (var (key, queue) in _buckets)
@@ -386,7 +419,8 @@ public sealed class ProgrammingEngine
                     var playOk = ignorePlayCap || remaining > 0;
                     var notRepeat = last is null || head.Id != last.Id;
                     var diversityOk = relaxDiversity || !rules.EnforceCulturalDiversity || RespectsDiversity(head, last);
-                    if (playOk && notRepeat && diversityOk)
+                    var durationOk = maxDuration is null || head.Duration <= maxDuration;
+                    if (playOk && notRepeat && diversityOk && durationOk)
                     {
                         scored.Add((head, queue, key, EquityScore(head, key, slotInfo, rules)));
                         break;
@@ -409,22 +443,39 @@ public sealed class ProgrammingEngine
             return best.Clip;
         }
 
-        public Clip? AnyEligible(Clip? last)
+        public Clip? AnyEligible(Clip? last, TimeSpan? maxDuration = null)
         {
             if (_catalog.Count == 0)
             {
                 return null;
             }
 
-            return _catalog
+            bool FitsDuration(Clip clip) => maxDuration is null || clip.Duration <= maxDuration;
+
+            var preferred = _catalog
                 .Where(clip => last is null || clip.Id != last.Id)
+                .Where(FitsDuration)
                 .OrderBy(clip => PlaysToday.GetValueOrDefault(clip.Id))
                 .ThenBy(clip => clip.LifetimePlayCount)
-                .FirstOrDefault()
-                ?? _catalog
+                .FirstOrDefault();
+            if (preferred is not null)
+            {
+                return preferred;
+            }
+
+            if (maxDuration is not null)
+            {
+                return _catalog
+                    .Where(FitsDuration)
                     .OrderBy(clip => PlaysToday.GetValueOrDefault(clip.Id))
                     .ThenBy(clip => clip.LifetimePlayCount)
-                    .First();
+                    .FirstOrDefault();
+            }
+
+            return _catalog
+                .OrderBy(clip => PlaysToday.GetValueOrDefault(clip.Id))
+                .ThenBy(clip => clip.LifetimePlayCount)
+                .First();
         }
 
         public Clip? AnyBurkinabe(Clip? previous, Clip? next, bool relaxDiversity)

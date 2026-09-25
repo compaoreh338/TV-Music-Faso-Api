@@ -321,6 +321,38 @@ public sealed class SqliteAuthService : IAuthService
         return UserAdminResult.Success($"Compte « {userName} » mis à jour.");
     }
 
+    public UserAdminResult DeleteUser(UserSession actor, Guid id)
+    {
+        if (UserAdmin.RejectIfUnauthorized(actor) is { } denied)
+        {
+            return denied;
+        }
+
+        using var connection = SqliteDatabase.Open(_databasePath);
+        var users = ReadUsers(connection);
+        if (UserAdmin.RejectDeletion(actor, users, id) is { } deletion)
+        {
+            return deletion;
+        }
+
+        var target = users.First(user => user.Id == id);
+        using (var revoke = connection.CreateCommand())
+        {
+            revoke.CommandText = "DELETE FROM sessions WHERE UserId = $id;";
+            revoke.Parameters.AddWithValue("$id", id.ToString());
+            revoke.ExecuteNonQuery();
+        }
+
+        using (var delete = connection.CreateCommand())
+        {
+            delete.CommandText = "DELETE FROM users WHERE Id = $id;";
+            delete.Parameters.AddWithValue("$id", id.ToString());
+            delete.ExecuteNonQuery();
+        }
+
+        return UserAdminResult.Success($"Compte « {target.UserName} » supprimé.");
+    }
+
     public UserAdminResult ResetPassword(UserSession actor, Guid id, string newPassword)
     {
         if (UserAdmin.RejectIfUnauthorized(actor) is { } denied)

@@ -132,4 +132,30 @@ public static class UserAdmin
 
         return null;
     }
+
+    public static UserAdminResult? RejectDeletion(UserSession actor, IReadOnlyList<AppUser> users, Guid id)
+    {
+        var target = users.FirstOrDefault(user => user.Id == id);
+        if (target is null)
+        {
+            return UserAdminResult.Fail("Utilisateur introuvable.");
+        }
+
+        if (id == actor.User.Id)
+        {
+            return UserAdminResult.Fail("Vous ne pouvez pas supprimer votre propre compte.");
+        }
+
+        if (target.IsActive && target.Role == UserRole.Direction)
+        {
+            var otherActiveDirections = users.Count(user =>
+                user.Id != id && user.IsActive && user.Role == UserRole.Direction);
+            if (otherActiveDirections == 0)
+            {
+                return UserAdminResult.Fail("Impossible : il doit rester au moins un compte Direction actif.");
+            }
+        }
+
+        return null;
+    }
 }

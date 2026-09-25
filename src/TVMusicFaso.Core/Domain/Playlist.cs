@@ -22,7 +22,15 @@ public sealed class Playlist
     public TimeSpan TotalDuration =>
         Items.Aggregate(TimeSpan.Zero, (sum, item) => sum + item.Clip.Duration);
 
-    public TimeSpan SlotDuration => TimeSlotInfo.For(Slot).Duration;
+    /// <summary>Début cible (horaires personnalisés). Sinon début de l’offre.</summary>
+    public TimeOnly? StartOverride { get; set; }
+
+    /// <summary>Durée cible (ex. horaires personnalisés). Sinon durée de l’offre.</summary>
+    public TimeSpan? DurationOverride { get; set; }
+
+    public TimeOnly SlotStart => StartOverride ?? TimeSlotInfo.For(Slot).Start;
+
+    public TimeSpan SlotDuration => DurationOverride ?? TimeSlotInfo.For(Slot).Duration;
 
     public TimeSpan RemainingDuration
     {

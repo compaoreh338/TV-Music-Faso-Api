@@ -57,9 +57,10 @@ public sealed class Clip
     /// <summary>Performance sur les réseaux sociaux, de 1 à 5.</summary>
     public decimal SocialScore { get; set; } = 3;
 
-    /// <summary>Moyenne des trois notes. Sert à identifier les Hits Premium.</summary>
+    /// <summary>Moyenne des trois notes (informatif). Le statut Hit dépend uniquement de <see cref="IsPremium"/>.</summary>
     public decimal ImpactScore { get; set; } = 3;
 
+    /// <summary>Case Premium / Hit : seule source du statut Hit pour la programmation.</summary>
     public bool IsPremium { get; set; }
 
     public bool IsMorallyCompliant { get; set; } = true;
@@ -96,7 +97,8 @@ public sealed class Clip
 
     public string OriginLabel => IsBurkinabe ? "Burkinabè" : "Étranger";
 
-    public bool IsHit => IsPremium || ImpactScore >= HitThreshold;
+    /// <summary>Hit uniquement si la case Premium / Hit est cochée (le score ne force plus le statut).</summary>
+    public bool IsHit => IsPremium;
 
     public string ImpactLabel => IsHit ? $"Hit {ImpactScore:0.0}" : $"Score {ImpactScore:0.0}";
 
@@ -114,10 +116,6 @@ public sealed class Clip
     public void RecalculateImpact()
     {
         ImpactScore = Math.Round((CommitteeRating + PopularityScore + SocialScore) / 3m, 1);
-        if (ImpactScore >= HitThreshold)
-        {
-            IsPremium = true;
-        }
     }
 
     public Clip SubmitForValidation()

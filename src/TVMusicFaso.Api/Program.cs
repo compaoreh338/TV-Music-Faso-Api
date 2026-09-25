@@ -637,6 +637,21 @@ app.MapPut("/api/users/{id:guid}", (Guid id, UserWriteRequest body, HttpContext 
     return Results.Ok(new { message = result.Message });
 });
 
+app.MapDelete("/api/users/{id:guid}", (Guid id, HttpContext http, ApiComposition composition) =>
+{
+    var session = composition.CurrentSession(http);
+    if (session is null) return Results.Unauthorized();
+    if (!session.Policy.CanManageUsers) return Denied();
+    var result = composition.Auth.DeleteUser(session, id);
+    if (!result.Ok)
+    {
+        return Results.BadRequest(new { message = result.Message });
+    }
+
+    composition.Audit.Write(session, "Utilisateur", result.Message);
+    return Results.Ok(new { message = result.Message });
+});
+
 app.MapPut("/api/users/{id:guid}/password", (Guid id, UserPasswordRequest body, HttpContext http, ApiComposition composition) =>
 {
     var session = composition.CurrentSession(http);
@@ -770,6 +785,7 @@ static object ScheduleDto(DaySchedule? schedule, DateOnly date) => new
 
 static object ToSessionDto(UserSession session) => new
 {
+    id = session.User.Id,
     token = session.AccessToken,
     fullName = session.User.FullName,
     userName = session.User.UserName,

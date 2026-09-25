@@ -316,6 +316,32 @@ public sealed class PostgresAuthService : IAuthService
         return UserAdminResult.Success($"Compte « {userName} » mis à jour.");
     }
 
+    public UserAdminResult DeleteUser(UserSession actor, Guid id)
+    {
+        if (UserAdmin.RejectIfUnauthorized(actor) is { } denied)
+        {
+            return denied;
+        }
+
+        using var connection = PostgresDatabase.Open(_connectionString);
+        var users = ReadUsers(connection);
+        if (UserAdmin.RejectDeletion(actor, users, id) is { } deletion)
+        {
+            return deletion;
+        }
+
+        var target = users.First(user => user.Id == id);
+        using var revoke = new NpgsqlCommand("DELETE FROM sessions WHERE user_id = @id;", connection);
+        revoke.Parameters.AddWithValue("id", id);
+        revoke.ExecuteNonQuery();
+
+        using var delete = new NpgsqlCommand("DELETE FROM users WHERE id = @id;", connection);
+        delete.Parameters.AddWithValue("id", id);
+        delete.ExecuteNonQuery();
+
+        return UserAdminResult.Success($"Compte « {target.UserName} » supprimé.");
+    }
+
     public UserAdminResult ResetPassword(UserSession actor, Guid id, string newPassword)
     {
         if (UserAdmin.RejectIfUnauthorized(actor) is { } denied)

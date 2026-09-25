@@ -11,7 +11,7 @@ public sealed class InMemoryBroadcastLog : IBroadcastLog
         _entries.RemoveAll(entry => entry.Date == schedule.Date);
         foreach (var playlist in schedule.Playlists)
         {
-            var cursor = TimeSlotInfo.For(playlist.Slot).Start;
+            var cursor = playlist.SlotStart;
             foreach (var item in playlist.Items)
             {
                 _entries.Add(new BroadcastLogEntry

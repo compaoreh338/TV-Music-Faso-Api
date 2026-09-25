@@ -47,7 +47,13 @@ public sealed class AppSettings
 
     public SlotRuleCatalog ToSlotCatalog()
     {
-        SlotRules = SlotRuleCatalog.Normalize(SlotRules);
+        var cleaned = SlotRuleCatalog.Sanitize(SlotRules);
+        if (!ReferenceEquals(cleaned, SlotRules))
+        {
+            SlotRules.Clear();
+            SlotRules.AddRange(cleaned);
+        }
+
         return new SlotRuleCatalog(SlotRules);
     }
 

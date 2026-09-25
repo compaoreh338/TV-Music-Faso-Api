@@ -106,7 +106,7 @@ public sealed class PlaylistExportService
     {
         foreach (var playlist in schedule.Playlists)
         {
-            var cursor = TimeSlotInfo.For(playlist.Slot).Start;
+            var cursor = playlist.SlotStart;
             foreach (var item in playlist.Items)
             {
                 yield return (new FlattenedItem(playlist, item), cursor);

@@ -8,7 +8,8 @@ public sealed class ApiComposition
     public ApiComposition(IConfiguration configuration)
     {
         var connection = configuration.GetConnectionString("Postgres")
-            ?? throw new InvalidOperationException("ConnectionStrings:Postgres manquant.");
+            ?? configuration["ConnectionStrings:Postgres"]
+            ?? "Host=localhost;Port=5432;Database=tvmusicfaso;Username=tvmusic;Password=tvmusic";
         PostgresDatabase.EnsureReady(connection);
         Clips = new PostgresClipRepository(connection);
         Auth = new PostgresAuthService(connection);

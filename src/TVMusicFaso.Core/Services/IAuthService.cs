@@ -29,6 +29,8 @@ public interface IAuthService
 
     UserAdminResult UpdateUser(UserSession actor, Guid id, string fullName, string userName, UserRole role, bool isActive);
 
+    UserAdminResult DeleteUser(UserSession actor, Guid id);
+
     UserAdminResult ResetPassword(UserSession actor, Guid id, string newPassword);
 
     ImpersonationResult Impersonate(UserSession actor, Guid userId);

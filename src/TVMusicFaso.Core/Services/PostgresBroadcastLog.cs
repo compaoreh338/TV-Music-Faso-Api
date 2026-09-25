@@ -23,7 +23,7 @@ public sealed class PostgresBroadcastLog : IBroadcastLog
 
         foreach (var playlist in schedule.Playlists)
         {
-            var cursor = TimeSlotInfo.For(playlist.Slot).Start;
+            var cursor = playlist.SlotStart;
             foreach (var item in playlist.Items)
             {
                 using var insert = new NpgsqlCommand(
