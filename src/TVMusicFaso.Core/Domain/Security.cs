@@ -71,11 +71,11 @@ public sealed class AccessPolicy
 
     public bool CanViewDashboard => true;
 
-    public bool CanExport => Role is UserRole.Programmateur or UserRole.Technicien;
+    public bool CanExport => !ForceConsultation && Role is UserRole.Programmateur or UserRole.Technicien;
 
     public bool CanViewReports => true;
 
-    public bool CanExportBbda => Role is UserRole.Direction or UserRole.Programmateur;
+    public bool CanExportBbda => !ForceConsultation && Role is UserRole.Direction or UserRole.Programmateur;
 
     public bool CanManageBackup => !ForceConsultation && Role is UserRole.Technicien or UserRole.Programmateur;
 

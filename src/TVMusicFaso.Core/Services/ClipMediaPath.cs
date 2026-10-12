@@ -38,6 +38,23 @@ public static class ClipMediaPath
         return File.Exists(byName) ? Path.GetFullPath(byName) : null;
     }
 
+    /// <summary>Vrai seulement si le fichier résolu est dans le dossier médiathèque.</summary>
+    public static bool IsInsideLibrary(string? fullPath, string? libraryRoot)
+    {
+        if (string.IsNullOrWhiteSpace(fullPath) || string.IsNullOrWhiteSpace(libraryRoot))
+        {
+            return false;
+        }
+
+        var root = Path.GetFullPath(libraryRoot.Trim());
+        var full = Path.GetFullPath(fullPath);
+        var comparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+        var prefix = root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        return full.StartsWith(prefix, comparison);
+    }
+
     public static string ContentType(string path) =>
         Path.GetExtension(path).ToLowerInvariant() switch
         {

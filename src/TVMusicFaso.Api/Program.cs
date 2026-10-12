@@ -275,9 +275,9 @@ app.MapGet("/api/clips/{id:guid}/media", (Guid id, HttpContext http, ApiComposit
     var clip = composition.Clips.GetById(id);
     if (clip is null) return Results.NotFound();
     var path = ClipMediaPath.Resolve(clip.FilePath, composition.LibraryRoot);
-    if (path is null)
+    if (path is null || !ClipMediaPath.IsInsideLibrary(path, composition.LibraryRoot))
     {
-        return Results.NotFound(new { message = "Fichier vidéo introuvable sur le serveur." });
+        return Results.NotFound(new { message = "Fichier vidéo introuvable dans la médiathèque." });
     }
 
     return Results.File(path, ClipMediaPath.ContentType(path), enableRangeProcessing: true);
