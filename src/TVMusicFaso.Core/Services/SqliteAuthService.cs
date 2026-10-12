@@ -27,9 +27,9 @@ public sealed class SqliteAuthService : IAuthService
             return;
         }
 
-        Insert(connection, "Sara Kaboré", DemoProgrammateur, $"Prog{DemoPasswordSuffix}", UserRole.Programmateur);
-        Insert(connection, "Ibrahim Sawadogo", DemoTechnicien, $"Tech{DemoPasswordSuffix}", UserRole.Technicien);
-        Insert(connection, "Marie Ouédraogo", DemoDirection, $"Dir{DemoPasswordSuffix}", UserRole.Direction);
+        Insert(connection, "Programmateur Filinfo TV", DemoProgrammateur, $"Prog{DemoPasswordSuffix}", UserRole.Programmateur);
+        Insert(connection, "Technicien Filinfo TV", DemoTechnicien, $"Tech{DemoPasswordSuffix}", UserRole.Technicien);
+        Insert(connection, "Direction Filinfo TV", DemoDirection, $"Dir{DemoPasswordSuffix}", UserRole.Direction);
     }
 
     public UserSession? SignIn(string userName, string password)

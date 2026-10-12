@@ -472,19 +472,23 @@ app.MapGet("/api/export/{format}", (string format, string? date, HttpContext htt
     var day = ParseDate(date);
     var schedule = composition.Schedules.Load(day, composition.Clips.GetAll());
     if (schedule is null) return Results.NotFound();
+    var stamp = $"{day:yyyy-MM-dd}_{DateTime.Now:HHmmss}";
     var (content, mime, name) = format.ToLowerInvariant() switch
     {
-        "mpl" => (composition.Export.ToMovieJayMpl(schedule), "application/xml", $"TVMusicFaso-{day:yyyyMMdd}.mpl"),
-        "m3u" => (composition.Export.ToM3u(schedule), "audio/x-mpegurl", $"TVMusicFaso-{day:yyyyMMdd}.m3u"),
-        "csv" => (composition.Export.ToCsv(schedule), "text/csv", $"TVMusicFaso-{day:yyyyMMdd}.csv"),
-        "xml" => (composition.Export.ToVmixXml(schedule), "application/xml", $"TVMusicFaso-{day:yyyyMMdd}.xml"),
+        "mpl" => (composition.Export.ToMovieJayMpl(schedule), "application/xml", $"TV-Music-Faso_{stamp}.mpl"),
+        "m3u" => (composition.Export.ToM3u(schedule), "audio/x-mpegurl", $"TV-Music-Faso_{stamp}_obs.m3u"),
+        "csv" => (composition.Export.ToCsv(schedule), "text/csv", $"TV-Music-Faso_{stamp}_vmix.csv"),
+        "xml" => (composition.Export.ToVmixXml(schedule), "application/xml", $"TV-Music-Faso_{stamp}_vmix.xml"),
         _ => (null, null, null)
     };
     if (content is null) return Results.BadRequest();
     composition.Audit.Write(session, "Export playout web", name!);
-    var payload = format.Equals("csv", StringComparison.OrdinalIgnoreCase)
-        ? ExportText.GetUtf8BomBytes(content)
-        : System.Text.Encoding.UTF8.GetBytes(content);
+    var payload = format.ToLowerInvariant() switch
+    {
+        "mpl" => ExportText.GetMovieJayMplBytes(content),
+        "csv" => ExportText.GetUtf8BomBytes(content),
+        _ => System.Text.Encoding.UTF8.GetBytes(content)
+    };
     return Results.File(payload, mime!, name);
 });
 

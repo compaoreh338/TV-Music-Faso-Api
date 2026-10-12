@@ -136,20 +136,26 @@ public static class PostgresDatabase
 
     public static void EnsureSeed(NpgsqlConnection connection, string connectionString)
     {
+        var freshInstall = false;
         using (var countUsers = new NpgsqlCommand("SELECT COUNT(*) FROM users;", connection))
         {
             if (Convert.ToInt64(countUsers.ExecuteScalar()) == 0)
             {
-                InsertUser(connection, "Sara Kaboré", DemoAccounts.Programmateur, DemoAccounts.ProgrammateurPassword, UserRole.Programmateur);
-                InsertUser(connection, "Ibrahim Sawadogo", DemoAccounts.Technicien, DemoAccounts.TechnicienPassword, UserRole.Technicien);
-                InsertUser(connection, "Marie Ouédraogo", DemoAccounts.Direction, DemoAccounts.DirectionPassword, UserRole.Direction);
+                freshInstall = true;
+                InsertUser(connection, "Programmateur Filinfo TV", DemoAccounts.Programmateur, DemoAccounts.ProgrammateurPassword, UserRole.Programmateur);
+                InsertUser(connection, "Technicien Filinfo TV", DemoAccounts.Technicien, DemoAccounts.TechnicienPassword, UserRole.Technicien);
+                InsertUser(connection, "Direction Filinfo TV", DemoAccounts.Direction, DemoAccounts.DirectionPassword, UserRole.Direction);
             }
         }
 
         InstallSeeder.SeedLanguages(new PostgresLanguageCatalog(connectionString));
 
-        var clips = new PostgresClipRepository(connectionString);
-        clips.EnsureInitialized(InstallSeeder.SeededLibrary());
+        if (freshInstall)
+        {
+            var clips = new PostgresClipRepository(connectionString);
+            clips.EnsureInitialized(InstallSeeder.SeededLibrary());
+        }
+
         BackfillLanguageNames(connection);
     }
 
