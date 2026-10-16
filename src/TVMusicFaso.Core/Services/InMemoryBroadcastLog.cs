@@ -8,7 +8,8 @@ public sealed class InMemoryBroadcastLog : IBroadcastLog
 
     public void Record(DaySchedule schedule)
     {
-        _entries.RemoveAll(entry => entry.Date == schedule.Date);
+        var validated = schedule.Playlists.Select(playlist => playlist.Slot).ToHashSet();
+        _entries.RemoveAll(entry => entry.Date == schedule.Date && validated.Contains(entry.Slot));
         foreach (var playlist in schedule.Playlists)
         {
             var cursor = playlist.SlotStart;

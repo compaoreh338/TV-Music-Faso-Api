@@ -30,6 +30,8 @@ public sealed class PostgresScheduleStore : IScheduleStore
                 .Select(playlist => new PlaylistRecord
                 {
                     Slot = playlist.Slot,
+                    Start = playlist.StartOverride,
+                    Duration = playlist.DurationOverride,
                     Items = playlist.Items
                         .Select(item => new PlaylistItemRecord { ClipId = item.Clip.Id, IsLocked = item.IsLocked })
                         .ToList()
@@ -71,7 +73,13 @@ public sealed class PostgresScheduleStore : IScheduleStore
         var schedule = new DaySchedule { Date = date };
         foreach (var playlistRecord in record.Playlists)
         {
-            var playlist = new Playlist { Date = date, Slot = playlistRecord.Slot };
+            var playlist = new Playlist
+            {
+                Date = date,
+                Slot = playlistRecord.Slot,
+                StartOverride = playlistRecord.Start,
+                DurationOverride = playlistRecord.Duration is { Ticks: > 0 } duration ? duration : null
+            };
             var rows = playlistRecord.Items.Count > 0
                 ? playlistRecord.Items
                 : playlistRecord.ClipIds.Select(id => new PlaylistItemRecord { ClipId = id }).ToList();
@@ -102,6 +110,11 @@ public sealed class PostgresScheduleStore : IScheduleStore
     private sealed class PlaylistRecord
     {
         public TimeSlot Slot { get; set; }
+
+        /// <summary>Début réel de la plage programmée. Absent dans les anciennes grilles.</summary>
+        public TimeOnly? Start { get; set; }
+
+        public TimeSpan? Duration { get; set; }
 
         public List<Guid> ClipIds { get; set; } = [];
 

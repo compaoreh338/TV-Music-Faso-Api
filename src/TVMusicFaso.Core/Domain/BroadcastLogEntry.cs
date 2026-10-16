@@ -29,4 +29,11 @@ public sealed class BroadcastLogEntry
     public string OriginLabel => IsBurkinabe ? "Burkinabè" : "Étranger";
 
     public string DurationLabel => Duration.ToString(@"mm\:ss");
+
+    public TimeOnly EndTime => StartTime.Add(Duration);
+
+    public string SlotLabel => Slot.ToDisplayName();
+
+    /// <summary>Horaire du passage : « 14:00:00 – 14:03:45 ».</summary>
+    public string TimeRangeLabel => $"{StartTime:HH\\:mm\\:ss} – {EndTime:HH\\:mm\\:ss}";
 }

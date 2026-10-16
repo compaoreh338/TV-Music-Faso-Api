@@ -17,8 +17,9 @@ public sealed class PostgresBroadcastLog : IBroadcastLog
         ArgumentNullException.ThrowIfNull(schedule);
 
         using var connection = PostgresDatabase.Open(_connectionString);
-        using var delete = new NpgsqlCommand("DELETE FROM broadcast_logs WHERE date = @date;", connection);
+        using var delete = new NpgsqlCommand("DELETE FROM broadcast_logs WHERE date = @date AND slot = ANY(@slots);", connection);
         delete.Parameters.AddWithValue("date", schedule.Date.ToDateTime(TimeOnly.MinValue));
+        delete.Parameters.AddWithValue("slots", schedule.Playlists.Select(playlist => (int)playlist.Slot).Distinct().ToArray());
         delete.ExecuteNonQuery();
 
         foreach (var playlist in schedule.Playlists)

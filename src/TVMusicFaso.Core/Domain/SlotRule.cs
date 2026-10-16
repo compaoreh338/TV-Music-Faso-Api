@@ -146,33 +146,42 @@ public sealed class SlotRuleCatalog
 {
     private readonly List<SlotRule> _rules;
 
+    /// <summary>Sans liste : offre complète (8). Une liste vide reste vide.</summary>
     public SlotRuleCatalog(IEnumerable<SlotRule>? rules = null)
     {
         _rules = rules as List<SlotRule> ?? Sanitize(rules);
-        if (_rules.Count == 0)
-        {
-            _rules.AddRange(CreateDefault());
-        }
     }
 
     public IReadOnlyList<SlotRule> Rules => _rules;
 
+    public bool IsEmpty => _rules.Count == 0;
+
+    /// <summary>La génération automatique ne remplit que ces tranches, dans cet ordre.</summary>
     public IReadOnlyList<TimeSlotInfo> ActiveSlots =>
         _rules.Select(rule => rule.ResolveInfo()).ToList();
 
     /// <summary>
-    /// Déduplique et ordonne les tranches actives. Liste vide → offre complète (8).
-    /// Ne réinjecte pas les tranches volontairement supprimées.
+    /// Déduplique et ordonne les tranches actives. Null → offre complète (8).
+    /// Une liste vide reste vide : toutes les tranches ont été volontairement supprimées.
     /// </summary>
     public static List<SlotRule> Sanitize(IEnumerable<SlotRule>? rules)
     {
-        var list = (rules ?? [])
+        if (rules is null)
+        {
+            return CreateDefault().ToList();
+        }
+
+        return rules
+            .Where(rule => rule is not null && CustomSlot.IsKnown(rule.Slot))
             .GroupBy(rule => rule.Slot)
             .Select(group => group.First())
-            .OrderBy(rule => rule.Slot)
+            .OrderBy(rule => rule.ResolveInfo().Start - BroadcastDayStart)
+            .ThenBy(rule => rule.Slot)
             .ToList();
-        return list.Count == 0 ? CreateDefault().ToList() : list;
     }
+
+    /// <summary>La journée d'antenne commence à 05h00 (première tranche de l'offre).</summary>
+    public static readonly TimeOnly BroadcastDayStart = new(5, 0);
 
     /// <summary>Compat : même comportement que <see cref="Sanitize"/>.</summary>
     public static List<SlotRule> Normalize(IEnumerable<SlotRule>? rules) => Sanitize(rules);
@@ -184,7 +193,11 @@ public sealed class SlotRuleCatalog
     }
 
     public SlotRule For(TimeSlot slot) =>
-        _rules.FirstOrDefault(rule => rule.Slot == slot) ?? CreateDefault().First(rule => rule.Slot == slot);
+        _rules.FirstOrDefault(rule => rule.Slot == slot)
+        ?? CreateDefault().FirstOrDefault(rule => rule.Slot == slot)
+        ?? (CustomSlot.TryDecode(slot, out var start, out var end)
+            ? CustomSlot.CreateRule(start, end)
+            : CreateDefault()[0]);
 
     public bool Matches(Clip clip, TimeSlot slot, DayOfWeek day)
     {

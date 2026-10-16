@@ -45,6 +45,94 @@ public sealed class ProgrammingEngine
         return schedule;
     }
 
+    /// <summary>
+    /// Programme une plage horaire d'une journée : seules les tranches actives qui la recoupent
+    /// sont remplies, rognées aux bornes de la plage. Les passages déjà prévus ailleurs dans
+    /// <paramref name="sameDay"/> comptent dans les plafonds quotidiens.
+    /// </summary>
+    public DaySchedule GenerateWindow(
+        IReadOnlyList<Clip> library,
+        DateOnly date,
+        TimeOnly start,
+        TimeSpan duration,
+        ThematicFilter? theme = null,
+        DaySchedule? sameDay = null)
+    {
+        ArgumentNullException.ThrowIfNull(library);
+        return GenerateSlots(library, date, SlotsInWindow(_slots.ActiveSlots, start, duration), theme, sameDay);
+    }
+
+    /// <summary>
+    /// Remplit uniquement les tranches données (horaires inclus). Les passages des autres tranches
+    /// de <paramref name="sameDay"/> comptent dans les plafonds quotidiens.
+    /// </summary>
+    public DaySchedule GenerateSlots(
+        IReadOnlyList<Clip> library,
+        DateOnly date,
+        IReadOnlyList<TimeSlotInfo> slots,
+        ThematicFilter? theme = null,
+        DaySchedule? sameDay = null)
+    {
+        ArgumentNullException.ThrowIfNull(library);
+        ArgumentNullException.ThrowIfNull(slots);
+        var windowSlots = slots;
+        var catalog = FilterCatalog(library, theme);
+        var state = BucketIndex.Build(catalog, date, _rules, _random, windowSlots);
+        var replaced = windowSlots.Select(slot => slot.Slot).ToHashSet();
+        foreach (var clip in (sameDay?.Playlists ?? [])
+                     .Where(playlist => !replaced.Contains(playlist.Slot))
+                     .SelectMany(playlist => playlist.Items.Select(item => item.Clip)))
+        {
+            if (state.Remaining.TryGetValue(clip.Id, out var left))
+            {
+                state.Remaining[clip.Id] = Math.Max(0, left - 1);
+                state.PlaysToday[clip.Id] = state.PlaysToday.GetValueOrDefault(clip.Id) + 1;
+            }
+        }
+
+        var schedule = new DaySchedule { Date = date };
+        foreach (var slotInfo in windowSlots)
+        {
+            schedule.Playlists.Add(FillSlot(slotInfo, date, state, [], theme, schedule));
+        }
+
+        RepairSovereignty(schedule, state, date, theme);
+        return schedule;
+    }
+
+    /// <summary>
+    /// Parties des tranches comprises dans la plage [start, start + duration[, qui ne doit pas
+    /// franchir minuit. Une tranche commencée la veille (22h–01h) compte pour sa partie après minuit.
+    /// </summary>
+    public static IReadOnlyList<TimeSlotInfo> SlotsInWindow(IReadOnlyList<TimeSlotInfo> slots, TimeOnly start, TimeSpan duration)
+    {
+        ArgumentNullException.ThrowIfNull(slots);
+        var windowStart = start.ToTimeSpan();
+        var windowEnd = windowStart + duration;
+        if (duration <= TimeSpan.Zero || windowEnd > TimeSpan.FromDays(1))
+        {
+            throw new ArgumentOutOfRangeException(nameof(duration), "La plage doit durer plus de 0 minute et finir au plus tard à minuit.");
+        }
+
+        var parts = new List<TimeSlotInfo>();
+        foreach (var slot in slots)
+        {
+            foreach (var shift in new[] { TimeSpan.Zero, -TimeSpan.FromDays(1) })
+            {
+                var slotStart = slot.Start.ToTimeSpan() + shift;
+                var from = windowStart > slotStart ? windowStart : slotStart;
+                var to = windowEnd < slotStart + slot.Duration ? windowEnd : slotStart + slot.Duration;
+                if (to > from)
+                {
+                    parts.Add(slot with { Start = TimeOnly.FromTimeSpan(from), Duration = to - from });
+                    break;
+                }
+            }
+        }
+
+        return parts.OrderBy(part => part.Start).ToList();
+    }
+
     public Playlist GenerateSlot(
         IReadOnlyList<Clip> library,
         TimeSlotInfo slotInfo,
@@ -373,7 +461,7 @@ public sealed class ProgrammingEngine
             Random random,
             IReadOnlyList<TimeSlotInfo>? activeSlots = null)
         {
-            var slots = activeSlots is { Count: > 0 } ? activeSlots : TimeSlotInfo.All;
+            var slots = activeSlots ?? TimeSlotInfo.All;
             var index = new BucketIndex();
             index._catalog.AddRange(catalog);
             foreach (var group in catalog.GroupBy(clip => new BucketKey(clip.IsBurkinabe, clip.Genre)))

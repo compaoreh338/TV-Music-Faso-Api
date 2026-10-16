@@ -19,8 +19,32 @@ public sealed record TimeSlotInfo(
         new(TimeSlot.UneHeure, new TimeOnly(1, 0), TimeSpan.FromHours(4), SlotMood.Melancolique, Audience.Adultes)
     ];
 
-    public static TimeSlotInfo For(TimeSlot slot) =>
-        All.First(info => info.Slot == slot);
+    public static TimeSlotInfo For(TimeSlot slot)
+    {
+        var offered = All.FirstOrDefault(info => info.Slot == slot);
+        if (offered is not null)
+        {
+            return offered;
+        }
+
+        if (!CustomSlot.TryDecode(slot, out var start, out var end))
+        {
+            throw new ArgumentOutOfRangeException(nameof(slot), slot, "Tranche inconnue.");
+        }
+
+        var model = Containing(start);
+        var duration = end.ToTimeSpan() - start.ToTimeSpan();
+        if (duration <= TimeSpan.Zero)
+        {
+            duration += TimeSpan.FromDays(1);
+        }
+
+        return new TimeSlotInfo(slot, start, duration, model.Mood, model.DefaultAudience);
+    }
+
+    /// <summary>Tranche de l'offre qui couvre cette heure (les 8 couvrent les 24 h).</summary>
+    public static TimeSlotInfo Containing(TimeOnly time) =>
+        All.FirstOrDefault(info => (time - info.Start) < info.Duration) ?? All[0];
 
     public string Label => $"{Start:HH\\hmm} · {Mood.ToDisplayName()} · {DefaultAudience.ToDisplayName()}";
 }

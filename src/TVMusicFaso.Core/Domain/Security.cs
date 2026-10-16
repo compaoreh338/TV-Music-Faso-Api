@@ -65,7 +65,7 @@ public sealed class AccessPolicy
 
     public bool CanSubmitClips => !ForceConsultation && Role is UserRole.Programmateur or UserRole.Technicien;
 
-    public bool CanValidateClips => !ForceConsultation && Role == UserRole.Direction;
+    public bool CanValidateClips => !ForceConsultation && Role is UserRole.Direction or UserRole.Programmateur;
 
     public bool CanEditPlaylists => !ForceConsultation && Role == UserRole.Programmateur;
 
@@ -81,7 +81,7 @@ public sealed class AccessPolicy
 
     public bool CanViewAudit => true;
 
-    public bool CanManageUsers => !ForceConsultation && Role == UserRole.Direction;
+    public bool CanManageUsers => !ForceConsultation && Role is UserRole.Direction or UserRole.Programmateur;
 
     public bool CanManageSlots => !ForceConsultation && Role is UserRole.Programmateur or UserRole.Direction;
 

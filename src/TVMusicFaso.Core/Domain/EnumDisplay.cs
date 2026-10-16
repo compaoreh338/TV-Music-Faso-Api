@@ -2,7 +2,12 @@ namespace TVMusicFaso.Core.Domain;
 
 public static class EnumDisplay
 {
-    public static string ToDisplayName(this Enum value) => value switch
+    public static string ToDisplayName(this Enum value) =>
+        value is TimeSlot slot && CustomSlot.TryDecode(slot, out var start, out var end)
+            ? CustomSlot.Label(start, end)
+            : OfferedName(value);
+
+    private static string OfferedName(Enum value) => value switch
     {
         MusicalGenre.CoupeDecale => "Coupé-décalé",
         MusicalGenre.Slam => "Slam",

@@ -17,9 +17,14 @@ public sealed class SqliteBroadcastLog : IBroadcastLog
 
         using var connection = SqliteDatabase.Open(_databasePath);
         using var delete = connection.CreateCommand();
-        delete.CommandText = "DELETE FROM broadcast_logs WHERE Date = $date;";
+        delete.CommandText = "DELETE FROM broadcast_logs WHERE Date = $date AND Slot = $slot;";
         delete.Parameters.AddWithValue("$date", schedule.Date.ToString("yyyy-MM-dd"));
-        delete.ExecuteNonQuery();
+        var slotParameter = delete.Parameters.AddWithValue("$slot", 0);
+        foreach (var slot in schedule.Playlists.Select(playlist => playlist.Slot).Distinct())
+        {
+            slotParameter.Value = (int)slot;
+            delete.ExecuteNonQuery();
+        }
 
         foreach (var playlist in schedule.Playlists)
         {

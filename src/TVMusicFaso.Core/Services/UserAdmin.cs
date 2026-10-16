@@ -32,7 +32,7 @@ public static class UserAdmin
 
         if (!actor.Policy.CanManageUsers)
         {
-            return UserAdminResult.Fail("Seule la Direction peut gérer les utilisateurs.");
+            return UserAdminResult.Fail("Seuls la Direction et le Programmateur peuvent gérer les utilisateurs.");
         }
 
         return null;

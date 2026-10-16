@@ -31,6 +31,26 @@ public sealed class BbdaWorkSummary
     }
 }
 
+/// <summary>Une feuille de relevé BBDA : passages d'une tranche pour un jour donné.</summary>
+public sealed class BbdaSheet
+{
+    public DateOnly Date { get; init; }
+
+    public TimeSlot Slot { get; init; }
+
+    public TimeOnly Start { get; init; }
+
+    public TimeOnly End { get; init; }
+
+    public int SheetNumber { get; init; } = 1;
+
+    public int SheetCount { get; init; } = 1;
+
+    public int FirstRowNumber { get; init; } = 1;
+
+    public required IReadOnlyList<BroadcastLogEntry> Passages { get; init; }
+}
+
 public sealed class BbdaReportService
 {
     private const int RowsPerPage = 10;
@@ -50,13 +70,14 @@ public sealed class BbdaReportService
         builder.AppendLine($"Passages;{entries.Count}");
         builder.AppendLine($"DureeTotale;{BbdaWorkSummary.FormatDuration(entries.Aggregate(TimeSpan.Zero, (sum, entry) => sum + entry.Duration))}");
         builder.AppendLine();
-        builder.AppendLine("Date;Heure;Tranche;Titre;Interprete;Duree;Langue;Genre;Origine;Fichier");
+        builder.AppendLine("Date;Heure;HeureFin;Tranche;Titre;Interprete;Duree;Langue;Genre;Origine;Fichier");
 
         foreach (var entry in entries.OrderBy(item => item.Date).ThenBy(item => item.StartTime))
         {
             builder.AppendLine(string.Join(';',
                 entry.Date.ToString("yyyy-MM-dd"),
                 entry.StartTime.ToString("HH:mm:ss", CultureInfo.InvariantCulture),
+                EndOf(entry).ToString("HH:mm:ss", CultureInfo.InvariantCulture),
                 entry.Slot.ToDisplayName(),
                 Quote(entry.Title),
                 Quote(entry.Artist),
@@ -80,21 +101,58 @@ public sealed class BbdaReportService
         return builder.ToString();
     }
 
+    /// <summary>
+    /// Un relevé par jour et par tranche : chaque passage avec son heure de début et de fin.
+    /// Un relevé trop long continue sur plusieurs feuilles (Feuille N° i/n).
+    /// </summary>
+    public IReadOnlyList<BbdaSheet> BuildSheets(IReadOnlyList<BroadcastLogEntry> entries)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+        var sheets = new List<BbdaSheet>();
+        var groups = entries
+            .Where(entry => !string.IsNullOrWhiteSpace(entry.Title) || !string.IsNullOrWhiteSpace(entry.Artist))
+            .GroupBy(entry => (entry.Date, entry.Slot))
+            .Select(OrderAcrossMidnight)
+            .OrderBy(group => group[0].Date)
+            .ThenBy(group => group[0].StartTime);
+        foreach (var group in groups)
+        {
+            var first = group[0];
+            var last = group[^1];
+            var pages = Chunk(group, RowsPerPage).ToList();
+            for (var index = 0; index < pages.Count; index++)
+            {
+                sheets.Add(new BbdaSheet
+                {
+                    Date = first.Date,
+                    Slot = first.Slot,
+                    Start = first.StartTime,
+                    End = EndOf(last),
+                    SheetNumber = index + 1,
+                    SheetCount = pages.Count,
+                    Passages = pages[index],
+                    FirstRowNumber = index * RowsPerPage + 1
+                });
+            }
+        }
+
+        return sheets;
+    }
+
     public byte[] ToPeriodPdf(IReadOnlyList<BroadcastLogEntry> entries, string periodLabel)
     {
         _ = periodLabel;
         EnsureLicense();
-        var works = SummarizeByWork(entries);
-        var pages = Chunk(works, RowsPerPage).ToList();
+        var pages = BuildSheets(entries).ToList();
         if (pages.Count == 0)
         {
-            pages.Add([]);
+            pages.Add(new BbdaSheet { Passages = [] });
         }
 
         var logo = LoadLogoBytes();
         var document = Document.Create(container =>
         {
-            foreach (var rows in pages)
+            foreach (var sheet in pages)
             {
                 container.Page(page =>
                 {
@@ -110,8 +168,8 @@ public sealed class BbdaReportService
                     {
                         column.Spacing(10);
                         column.Item().Element(header => ComposeHeader(header, logo));
-                        column.Item().Element(ComposeDottedFields);
-                        column.Item().Element(table => ComposeTable(table, rows));
+                        column.Item().Element(fields => ComposeDottedFields(fields, sheet));
+                        column.Item().Element(table => ComposeTable(table, sheet));
                         column.Item().Element(ComposeFooter);
                     });
                 });
@@ -180,13 +238,21 @@ public sealed class BbdaReportService
         });
     }
 
-    private static void ComposeDottedFields(IContainer container)
+    private static void ComposeDottedFields(IContainer container, BbdaSheet sheet)
     {
         // Alignement du formulaire papier :
         // EMISSION (gauche) | Station / Relevé (centre, décalés) | DIFFUSION (droite)
+        var filled = sheet.Passages.Count > 0;
         container.Column(section =>
         {
-            section.Item().Text("EMISSION :").Bold().FontColor(BbdaGreen).FontSize(10);
+            section.Item().Text(text =>
+            {
+                text.Span("EMISSION : ").Bold().FontColor(BbdaGreen).FontSize(10);
+                if (filled)
+                {
+                    text.Span(sheet.Slot.ToDisplayName()).FontSize(10);
+                }
+            });
 
             section.Item().PaddingTop(4).Row(row =>
             {
@@ -216,28 +282,51 @@ public sealed class BbdaReportService
                 {
                     right.Spacing(4);
                     right.Item().Text("DIFFUSION :").Bold().FontColor(BbdaGreen).FontSize(10);
-                    right.Item().Text("Date :").Bold().FontSize(9);
+                    right.Item().Text(text =>
+                    {
+                        text.Span("Date : ").Bold().FontSize(9);
+                        FieldValue(text, filled ? sheet.Date.ToString("dd/MM/yyyy", CultureInfo.InvariantCulture) : null, 28);
+                    });
                     right.Item().Text(text =>
                     {
                         text.Span("Horaire Début : ").Bold().FontSize(9);
-                        text.Span(Dots(28)).FontColor(Colors.Grey.Medium);
+                        FieldValue(text, filled ? sheet.Start.ToString("HH:mm:ss", CultureInfo.InvariantCulture) : null, 28);
                     });
                     right.Item().Text(text =>
                     {
                         text.Span("Horaire Fin / ").Bold().FontSize(9);
-                        text.Span(Dots(30)).FontColor(Colors.Grey.Medium);
+                        FieldValue(text, filled ? sheet.End.ToString("HH:mm:ss", CultureInfo.InvariantCulture) : null, 30);
                     });
                     right.Item().Text(text =>
                     {
                         text.Span("Feuille N° : ").Bold().FontSize(9);
-                        text.Span("...../............").FontColor(Colors.Grey.Medium);
+                        if (filled)
+                        {
+                            text.Span($"{sheet.SheetNumber}/{sheet.SheetCount}").FontSize(9);
+                        }
+                        else
+                        {
+                            text.Span("...../............").FontColor(Colors.Grey.Medium);
+                        }
                     });
                 });
             });
         });
     }
 
-    private static void ComposeTable(IContainer container, IReadOnlyList<BbdaWorkSummary> rows)
+    private static void FieldValue(TextDescriptor text, string? value, int dots)
+    {
+        if (value is null)
+        {
+            text.Span(Dots(dots)).FontColor(Colors.Grey.Medium);
+        }
+        else
+        {
+            text.Span(value).FontSize(9);
+        }
+    }
+
+    private static void ComposeTable(IContainer container, BbdaSheet sheet)
     {
         container.Table(table =>
         {
@@ -245,10 +334,12 @@ public sealed class BbdaReportService
             {
                 columns.ConstantColumn(22);
                 columns.RelativeColumn(3.1f);
-                columns.ConstantColumn(68);
-                columns.RelativeColumn(2.1f);
+                columns.ConstantColumn(60);
+                columns.RelativeColumn(1.6f);
                 columns.RelativeColumn(2.5f);
-                columns.ConstantColumn(68);
+                columns.ConstantColumn(56);
+                columns.ConstantColumn(56);
+                columns.ConstantColumn(56);
             });
 
             table.Header(header =>
@@ -258,18 +349,22 @@ public sealed class BbdaReportService
                 header.Cell().Element(c => HeaderCell(c, "BBDA\n(Ne rien écrire)"));
                 header.Cell().Element(c => HeaderCell(c, "GENRE\n(Musique-Littérature-Théâtre-Films…)"));
                 header.Cell().Element(c => HeaderCell(c, "NOM DE L'AUTEUR PRINCIPAL"));
+                header.Cell().Element(c => HeaderCell(c, "HEURE DEBUT"));
+                header.Cell().Element(c => HeaderCell(c, "HEURE FIN"));
                 header.Cell().Element(c => HeaderCell(c, "DUREE"));
             });
 
             for (var i = 0; i < RowsPerPage; i++)
             {
-                var work = i < rows.Count ? rows[i] : null;
-                table.Cell().Element(c => BodyCell(c, (i + 1).ToString(), alignCenter: true));
-                table.Cell().Element(c => BodyCell(c, work?.Title ?? string.Empty));
+                var passage = i < sheet.Passages.Count ? sheet.Passages[i] : null;
+                table.Cell().Element(c => BodyCell(c, (sheet.FirstRowNumber + i).ToString(), alignCenter: true));
+                table.Cell().Element(c => BodyCell(c, passage?.Title.Trim() ?? string.Empty));
                 table.Cell().Element(c => BodyCell(c, string.Empty));
-                table.Cell().Element(c => BodyCell(c, work?.Genre ?? string.Empty));
-                table.Cell().Element(c => BodyCell(c, work?.Artist ?? string.Empty));
-                table.Cell().Element(c => BodyCell(c, work?.DurationLabel ?? string.Empty, alignCenter: true));
+                table.Cell().Element(c => BodyCell(c, passage is null ? string.Empty : "Musique"));
+                table.Cell().Element(c => BodyCell(c, passage?.Artist.Trim() ?? string.Empty));
+                table.Cell().Element(c => BodyCell(c, passage?.StartTime.ToString("HH:mm:ss", CultureInfo.InvariantCulture) ?? string.Empty, alignCenter: true));
+                table.Cell().Element(c => BodyCell(c, passage is null ? string.Empty : EndOf(passage).ToString("HH:mm:ss", CultureInfo.InvariantCulture), alignCenter: true));
+                table.Cell().Element(c => BodyCell(c, passage is null ? string.Empty : BbdaWorkSummary.FormatDuration(passage.Duration), alignCenter: true));
             }
         });
     }
@@ -314,7 +409,36 @@ public sealed class BbdaReportService
         }
     }
 
-    private static IEnumerable<List<BbdaWorkSummary>> Chunk(IReadOnlyList<BbdaWorkSummary> source, int size)
+    public static TimeOnly EndOf(BroadcastLogEntry entry) => entry.StartTime.Add(entry.Duration);
+
+    /// <summary>
+    /// Trie les passages d'une tranche dans l'ordre de diffusion, y compris quand elle passe
+    /// minuit (22:00 … 23:58, 00:02 …) : la liste commence après le plus grand trou horaire.
+    /// </summary>
+    private static List<BroadcastLogEntry> OrderAcrossMidnight(IEnumerable<BroadcastLogEntry> passages)
+    {
+        var sorted = passages.OrderBy(entry => entry.StartTime).ToList();
+        if (sorted.Count < 2)
+        {
+            return sorted;
+        }
+
+        var startIndex = 0;
+        var largestGap = TimeSpan.FromDays(1) - (sorted[^1].StartTime - sorted[0].StartTime);
+        for (var i = 1; i < sorted.Count; i++)
+        {
+            var gap = sorted[i].StartTime - sorted[i - 1].StartTime;
+            if (gap > largestGap)
+            {
+                largestGap = gap;
+                startIndex = i;
+            }
+        }
+
+        return sorted.Skip(startIndex).Concat(sorted.Take(startIndex)).ToList();
+    }
+
+    private static IEnumerable<List<T>> Chunk<T>(IReadOnlyList<T> source, int size)
     {
         for (var i = 0; i < source.Count; i += size)
         {

@@ -157,7 +157,14 @@ app.MapGet("/api/reports/bbda", (DateOnly? from, DateOnly? to, int? year, int? m
             title = entry.Title,
             artist = entry.Artist,
             duration = entry.DurationLabel,
-            origin = entry.OriginLabel
+            origin = entry.OriginLabel,
+            startTime = entry.StartTime.ToString("HH:mm:ss"),
+            endTime = BbdaReportService.EndOf(entry).ToString("HH:mm:ss"),
+            slotKey = entry.Slot.ToString(),
+            durationSeconds = (int)Math.Round(entry.Duration.TotalSeconds),
+            genre = entry.Genre.ToString(),
+            language = entry.Language.ToString(),
+            isBurkinabe = entry.IsBurkinabe
         })
     });
 });
@@ -264,9 +271,21 @@ app.MapPost("/api/clips/import", async (HttpContext http, ApiComposition composi
     if (!session.Policy.CanSubmitClips) return Denied();
     using var reader = new StreamReader(http.Request.Body);
     var csv = await reader.ReadToEndAsync();
-    var imported = new LibraryCsvService().Import(csv, composition.Clips);
-    composition.Audit.Write(session, "Import mediatheque", $"{imported} clips");
-    return Results.Ok(new { imported });
+    var report = new LibraryCsvService().ImportWithReport(csv, composition.Clips);
+    if (report.Imported > 0)
+    {
+        composition.Audit.Write(session, "Import mediatheque", $"{report.Imported} clips");
+    }
+
+    return report.FatalError is not null && report.Imported == 0
+        ? Results.BadRequest(new { message = report.FatalError, imported = 0 })
+        : Results.Ok(new
+        {
+            imported = report.Imported,
+            duplicates = report.Duplicates,
+            rejected = report.Rejected.Select(issue => new { line = issue.Line, message = issue.Message }),
+            warnings = report.Warnings.Count
+        });
 });
 
 app.MapGet("/api/clips/{id:guid}/media", (Guid id, HttpContext http, ApiComposition composition) =>
@@ -385,8 +404,20 @@ app.MapPost("/api/schedules/generate", (GenerateRequest body, HttpContext http, 
             BurkinabeOnly: body.BurkinabeOnly == true);
     }
 
+    var engine = composition.Engine;
+    if (body.Slots is not null)
+    {
+        var slots = SlotRuleCatalog.Sanitize(body.Slots);
+        if (slots.Count == 0)
+        {
+            return Results.BadRequest(new { message = "Aucune tranche : ajoutez au moins une tranche avant de générer." });
+        }
+
+        engine = new TVMusicFaso.Core.Rules.ProgrammingEngine(slots: new SlotRuleCatalog(slots));
+    }
+
     var existing = composition.Schedules.Load(day, library);
-    var schedule = composition.Engine.GenerateDay(library, day, theme, existing);
+    var schedule = engine.GenerateDay(library, day, theme, existing);
     composition.Schedules.Save(schedule);
     composition.Audit.Write(session, "Génération grille", day.ToString("yyyy-MM-dd"));
     return Results.Ok(ScheduleDto(schedule, day));
@@ -407,7 +438,15 @@ app.MapPut("/api/schedules", (SaveScheduleRequest body, HttpContext http, ApiCom
             continue;
         }
 
-        var playlist = new Playlist { Date = day, Slot = slot };
+        var playlist = new Playlist
+        {
+            Date = day,
+            Slot = slot,
+            StartOverride = TimeOnly.TryParseExact(playlistBody.Start, "HH:mm", out var start) ? start : null,
+            DurationOverride = playlistBody.DurationMinutes is > 0 and <= 24 * 60
+                ? TimeSpan.FromMinutes(playlistBody.DurationMinutes.Value)
+                : null
+        };
         var position = 1;
         foreach (var item in playlistBody.Items ?? [])
         {
@@ -459,8 +498,22 @@ app.MapPost("/api/broadcasts/validate", (GenerateRequest body, HttpContext http,
     var library = composition.Clips.GetAll();
     var schedule = composition.Schedules.Load(day, library);
     if (schedule is null) return Results.NotFound();
+    if (body.SlotKeys is { Count: > 0 })
+    {
+        var keys = body.SlotKeys
+            .Select(key => Enum.TryParse<TimeSlot>(key, out var slot) ? slot : (TimeSlot?)null)
+            .Where(slot => slot is not null)
+            .Select(slot => slot!.Value)
+            .ToHashSet();
+        var selected = new DaySchedule { Date = day };
+        selected.Playlists.AddRange(schedule.Playlists.Where(playlist => keys.Contains(playlist.Slot)));
+        if (selected.Playlists.Count == 0) return Results.NotFound();
+        schedule = selected;
+    }
+
     composition.Broadcasts.Record(schedule);
-    composition.Audit.Write(session, "Validation diffusion", day.ToString("yyyy-MM-dd"));
+    var validatedSlots = string.Join(", ", schedule.Playlists.Select(playlist => playlist.Slot.ToDisplayName()));
+    composition.Audit.Write(session, "Validation diffusion", $"{day:yyyy-MM-dd} · {validatedSlots}");
     return Results.Ok(new { recorded = schedule.Playlists.Sum(playlist => playlist.Items.Count) });
 });
 
@@ -774,6 +827,8 @@ static object ScheduleDto(DaySchedule? schedule, DateOnly date) => new
     {
         slot = playlist.Slot.ToString(),
         slotLabel = playlist.Slot.ToDisplayName(),
+        start = playlist.StartOverride?.ToString("HH:mm"),
+        durationMinutes = playlist.DurationOverride is { } duration ? (int?)Math.Round(duration.TotalMinutes) : null,
         sovereignty = Math.Round(playlist.SovereigntyPercent, 1),
         items = playlist.Items.Select(item => new
         {
@@ -821,10 +876,10 @@ static object UserDto(AppUser user) => new
 };
 
 public sealed record LoginRequest(string? UserName, string? Password);
-public sealed record GenerateRequest(string? Date, bool? Thematic, string? Preset, string? Genre, bool? BurkinabeOnly);
+public sealed record GenerateRequest(string? Date, bool? Thematic, string? Preset, string? Genre, bool? BurkinabeOnly, List<SlotRule>? Slots = null, List<string>? SlotKeys = null);
 public sealed record LockRequest(string? Date, string? Slot, int Position);
 public sealed record SaveScheduleRequest(string? Date, List<SavePlaylistRequest>? Playlists);
-public sealed record SavePlaylistRequest(string? Slot, List<SaveItemRequest>? Items);
+public sealed record SavePlaylistRequest(string? Slot, List<SaveItemRequest>? Items, string? Start = null, int? DurationMinutes = null);
 public sealed record SaveItemRequest(Guid ClipId, bool IsLocked);
 public sealed record ProfileRequest(string? FullName, string? UserName);
 public sealed record PasswordRequest(string? CurrentPassword, string? NewPassword);

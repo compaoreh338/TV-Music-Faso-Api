@@ -22,7 +22,7 @@ public sealed class PlaylistExportService
         foreach (var (item, start) in Flatten(schedule))
         {
             builder.AppendLine(string.Join(';',
-                schedule.Date.ToString("yyyy-MM-dd"),
+                (item.Playlist.Date == default ? schedule.Date : item.Playlist.Date).ToString("yyyy-MM-dd"),
                 item.Playlist.Slot.ToDisplayName(),
                 start.ToString("HH:mm:ss", CultureInfo.InvariantCulture),
                 item.Item.Position,
@@ -161,6 +161,9 @@ public sealed class PlaylistExportService
             .Replace(">", "&gt;", StringComparison.Ordinal)
             .Replace("'", "&apos;", StringComparison.Ordinal);
 
+    /// <summary>
+    /// Liste d'entrées vidéo pour import vMix.
+    /// </summary>
     public string ToVmixXml(DaySchedule schedule)
     {
         var inputs = Flatten(schedule)
