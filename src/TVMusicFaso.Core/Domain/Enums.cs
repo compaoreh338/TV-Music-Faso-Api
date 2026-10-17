@@ -9,7 +9,17 @@ public enum MusicalGenre
     Gospel,
     Urbain,
     MusiqueMusulmane,
-    Autre
+    Autre,
+    Independance,
+    Noel,
+    Tabaski,
+    Paques,
+    HuitMars,
+    SoutienFds,
+    Rap,
+    HipHop,
+    Reggae,
+    Zouk
 }
 
 public enum ClipLanguage

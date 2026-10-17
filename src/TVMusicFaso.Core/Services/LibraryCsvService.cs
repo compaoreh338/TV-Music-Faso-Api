@@ -560,8 +560,11 @@ public sealed class LibraryCsvService
         "adulte" => Audience.Adultes,
         "tous" or "toutpublic" or "tout" => Audience.Famille,
         "afro" => MusicalGenre.AfroPop,
-        "rap" or "hiphop" or "rnb" => MusicalGenre.Urbain,
-        "religieux" or "chretien" => MusicalGenre.Gospel,
+        "rnb" => MusicalGenre.Urbain,
+        "religieux" or "chretien" or "gospel" => MusicalGenre.Gospel,
+        "idenpendance" => MusicalGenre.Independance,
+        "paque" => MusicalGenre.Paques,
+        "reagge" => MusicalGenre.Reggae,
         _ => null
     };
 

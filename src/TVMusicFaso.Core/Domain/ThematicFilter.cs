@@ -70,7 +70,7 @@ public sealed record ThematicPreset(string Name, ThematicFilter Filter)
     [
         new("Spécial 100% Slam", new ThematicFilter(Genre: MusicalGenre.Slam)),
         new("Spécial Musique du Terroir", new ThematicFilter(Genre: MusicalGenre.Traditionnel)),
-        new("Spécial Gospel", new ThematicFilter(Genre: MusicalGenre.Gospel)),
+        new("Spécial Religieux", new ThematicFilter(Genre: MusicalGenre.Gospel)),
         new("Spécial Coupé-décalé", new ThematicFilter(Genre: MusicalGenre.CoupeDecale)),
         new("Spécial Afro-pop", new ThematicFilter(Genre: MusicalGenre.AfroPop)),
         new("Spécial 100% Burkinabè", new ThematicFilter(BurkinabeOnly: true))
