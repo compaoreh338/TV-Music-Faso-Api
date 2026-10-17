@@ -155,11 +155,19 @@ public sealed class PlaylistExportService
         return seconds.ToString("0.0#####", CultureInfo.InvariantCulture);
     }
 
-    private static string MovieJayAttr(string value) =>
-        value.Replace("&", "&amp;", StringComparison.Ordinal)
+    /// <summary>
+    /// MovieJay conserve & et l'apostrophe dans les attributs.
+    /// Il ne décode pas les entités XML : un nom encodé ne correspond plus au fichier.
+    /// </summary>
+    private static string MovieJayAttr(string value)
+    {
+        var text = value
+            .Replace("&amp;", "&", StringComparison.Ordinal)
+            .Replace("&apos;", "'", StringComparison.Ordinal);
+        return text
             .Replace("<", "&lt;", StringComparison.Ordinal)
-            .Replace(">", "&gt;", StringComparison.Ordinal)
-            .Replace("'", "&apos;", StringComparison.Ordinal);
+            .Replace(">", "&gt;", StringComparison.Ordinal);
+    }
 
     /// <summary>
     /// Liste d'entrées vidéo pour import vMix.
