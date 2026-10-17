@@ -22,6 +22,14 @@ public static class ClipMediaPath
             return uri.LocalPath;
         }
 
+        foreach (var alias in AliasCandidates(trimmed))
+        {
+            if (File.Exists(alias))
+            {
+                return Path.GetFullPath(alias);
+            }
+        }
+
         if (string.IsNullOrWhiteSpace(libraryRoot))
         {
             return null;
@@ -41,14 +49,24 @@ public static class ClipMediaPath
     }
 
     /// <summary>
-    /// Chemin à enregistrer en base : un fichier choisi sous /Volumes/DIFFUSION sur un Mac
-    /// est stocké avec la lettre du lecteur Windows (K:\STOCKAGE\...) pour que le serveur,
-    /// MovieJay et les autres postes le relisent. Hors du disque partagé, rien ne change.
+    /// Chemin à enregistrer en base : un fichier choisi sous /Volumes/MUSIQUE sur un Mac
+    /// est stocké en K:\STOCKAGE\MUSIQUE\... pour que le serveur, MovieJay et les autres
+    /// postes le relisent. Hors du disque partagé, rien ne change.
     /// </summary>
     public static string ToSharedDiskPath(string localPath, string? localRoot, string? windowsRoot)
     {
-        if (string.IsNullOrWhiteSpace(localPath)
-            || string.IsNullOrWhiteSpace(localRoot)
+        if (string.IsNullOrWhiteSpace(localPath))
+        {
+            return localPath;
+        }
+
+        var canonical = ToCanonicalWindowsPath(localPath);
+        if (!string.Equals(canonical, localPath, StringComparison.OrdinalIgnoreCase))
+        {
+            return canonical;
+        }
+
+        if (string.IsNullOrWhiteSpace(localRoot)
             || string.IsNullOrWhiteSpace(windowsRoot)
             || OperatingSystem.IsWindows())
         {
@@ -84,6 +102,11 @@ public static class ClipMediaPath
         if (TryStripDriveLetter(normalized, out var afterDrive) && seen.Add(afterDrive))
         {
             yield return afterDrive;
+        }
+
+        if (TryMusiqueTail(normalized, out var afterShare) && seen.Add(afterShare))
+        {
+            yield return afterShare;
         }
 
         var afterMarker = RelativeToSharedDisk(path).Replace('\\', '/').TrimStart('/');
@@ -156,6 +179,74 @@ public static class ClipMediaPath
 
     private static bool HasDriveLetter(string path) =>
         path.Length >= 2 && char.IsAsciiLetter(path[0]) && path[1] == ':';
+
+    /// <summary>
+    /// Le partage SMB MUSIQUE (<c>K:\STOCKAGE\MUSIQUE</c> sur le serveur,
+    /// <c>/Volumes/MUSIQUE</c> sur un Mac) désigne le même dossier.
+    /// </summary>
+    public const string MusiqueWindowsRoot = @"K:\STOCKAGE\MUSIQUE";
+
+    public const string MusiqueMacRoot = "/Volumes/MUSIQUE";
+
+    /// <summary>Réécrit un chemin Mac du partage MUSIQUE vers le chemin Windows du serveur.</summary>
+    public static string ToCanonicalWindowsPath(string localPath)
+    {
+        var normalized = localPath.Trim().Replace('\\', '/');
+        if (!normalized.StartsWith(MusiqueMacRoot + "/", StringComparison.OrdinalIgnoreCase)
+            || !TryMusiqueTail(normalized, out var tail))
+        {
+            return localPath;
+        }
+
+        return WindowsMusiquePath(tail);
+    }
+
+    /// <summary>Les deux chemins absolus du même fichier sur le partage MUSIQUE.</summary>
+    public static IEnumerable<string> AliasCandidates(string path)
+    {
+        var normalized = path.Replace('\\', '/');
+        if (!TryMusiqueTail(normalized, out var tail))
+        {
+            yield break;
+        }
+
+        yield return WindowsMusiquePath(tail);
+        yield return MacMusiquePath(tail);
+    }
+
+    /// <summary>
+    /// Vrai si le fichier est dans le dossier configuré sur ce poste, ou dans un partage connu
+    /// (MUSIQUE ou DIFFUSION).
+    /// </summary>
+    public static bool IsServable(string? fullPath, string? libraryRoot) =>
+        IsInsideLibrary(fullPath, libraryRoot)
+        || IsInsideLibrary(fullPath, MusiqueWindowsRoot)
+        || IsInsideLibrary(fullPath, MusiqueMacRoot)
+        || IsInsideLibrary(fullPath, @"K:\DIFFUSION")
+        || IsInsideLibrary(fullPath, "/Volumes/DIFFUSION");
+
+    private static bool TryMusiqueTail(string normalized, out string tail)
+    {
+        tail = string.Empty;
+        foreach (var prefix in new[] { "K:/STOCKAGE/MUSIQUE/", MusiqueMacRoot + "/" })
+        {
+            if (!normalized.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            tail = normalized[prefix.Length..].Trim('/');
+            return tail.Length > 0;
+        }
+
+        return false;
+    }
+
+    private static string WindowsMusiquePath(string tail) =>
+        MusiqueWindowsRoot + "\\" + tail.Replace('/', '\\');
+
+    private static string MacMusiquePath(string tail) =>
+        MusiqueMacRoot + "/" + tail;
 
     /// <summary>Vrai seulement si le fichier résolu est dans le dossier médiathèque.</summary>
     public static bool IsInsideLibrary(string? fullPath, string? libraryRoot)
