@@ -66,7 +66,7 @@ public sealed class PlaylistExportService
     {
         var playlistName = "TV-Music Faso " + schedule.Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         var builder = new StringBuilder();
-        builder.Append("<m_config path='").Append(MovieJayAttr(playlistName + ".mpl")).AppendLine("'>");
+        builder.Append("<m_config path=").Append(MovieJayQuoted(playlistName + ".mpl")).AppendLine(">");
         builder.AppendLine("\t<video aspect_ratio='16:9'/>");
         builder.AppendLine("\t<audio channels='14' rate='48000' bits='16' track_split='14'>");
         builder.AppendLine("\t\t<track source_index='0' mode='enabled' input_channels='0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13' gain='4.0, 4.0, 4.0, 4.0, 4.0, 4.0, 4.0, 4.0, 4.0, 4.0, 4.0, 4.0, 4.0, 4.0' mute='0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0' output_channels='0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13' desc='Track 0'/>");
@@ -94,8 +94,8 @@ public sealed class PlaylistExportService
         var refId = $"0x{(0x30000000 + index):X8}";
 
         builder.Append("\t<file in='0.0' out='").Append(seconds)
-            .Append("' path='").Append(MovieJayAttr(path))
-            .Append("' interlace='default' aspect_ratio='' scale_type='default' external_audio='' external_audio_offset='' preview.pull='false' img_stub='' img.default_duration='86400' img.tone='' no_breaks='false' open_file.max_wait='10000' open_url.max_wait='15000' read_url.max_wait='3000' read_file.max_wait='3000' force_mpeg_tc='false' audio_track='all' video_track='0' subtitle_track='-1' ts_program='0' network.buffer_min='5.0' network.buffer_max='20.0' network.rate_control='true' file.buffer_min='0.0' file.buffer_max='2.0' decode='auto' decode.fallback='false' file.max_forward_rate='4.0' file.max_reverse_rate='2.0' out_point.mode='wait' mfreader.convert_format='true' output.10bit='false' mxf.use_track_origin='false' start_timecode='' duration='")
+            .Append("' path=").Append(MovieJayQuoted(path))
+            .Append(" interlace='default' aspect_ratio='' scale_type='default' external_audio='' external_audio_offset='' preview.pull='false' img_stub='' img.default_duration='86400' img.tone='' no_breaks='false' open_file.max_wait='10000' open_url.max_wait='15000' read_url.max_wait='3000' read_file.max_wait='3000' force_mpeg_tc='false' audio_track='all' video_track='0' subtitle_track='-1' ts_program='0' network.buffer_min='5.0' network.buffer_max='20.0' network.rate_control='true' file.buffer_min='0.0' file.buffer_max='2.0' decode='auto' decode.fallback='false' file.max_forward_rate='4.0' file.max_reverse_rate='2.0' out_point.mode='wait' mfreader.convert_format='true' output.10bit='false' mxf.use_track_origin='false' start_timecode='' duration='")
             .Append(seconds).Append("' ref_id='").Append(refId).AppendLine("' loop='false'>");
         builder.Append("\t\t<info ts_programs='0' subtitle_tracks='0' video_tracks='1' audio_tracks='1' streams='2' format='mov,mp4,m4a,3gp,3g2,mj2' format_name='QuickTime / MOV' start_time='0.0' duration='")
             .Append(seconds).Append("' size='0' bitrate='0' bitrate_kbps='0' play_while_rec='' splitter_name='ffmpeg'>").AppendLine();
@@ -110,12 +110,12 @@ public sealed class PlaylistExportService
         builder.AppendLine("\t\t\t<track source_index='0' mode='enabled' input_channels='0, 1' gain='0.0, 0.0' mute='0, 0' output_channels='0, 1' desc='Track 0'/>");
         builder.AppendLine("\t\t</audio>");
         builder.AppendLine("\t\t<object imaudio.enabled='true' audio_channels='' audio_gain='' gpu.rgb_transform_matrix='' default_name='MFile' default_tracks='0' channels_per_track='0' internal.convert_frame='false' experimental.buffers='0' pause.fields='2' pause.use_reference='false' afilter='' scaling_quality='auto' scaling_deinterlace_first='false' crop='' mirror='' rotate='' overlay_rms='false' overlay_rms.pos='0.1' overlay_rms.color='green' overlay_waveform='false' overlay_waveform.pos='-0.3' overlay_waveform.color='' audio.variable_rate='true' audio.lufs='false' audio.lufs_state='' audio.lufs_channels='' audio.gain_normalization='false' gain_normalization.target_i='-23.0' gain_normalization.gating='-100.0' gain_normalization.loudness_type='rms' timecode.time_sync='0' timecode.offset='' mfconverter.enabled='true' format.set_default_pixelformat='true' mdelay.enabled='false' mdelay.live_preview='false' playback_rate='1.0' experimental.exact_duration='false'/>");
-        builder.Append("\t\t<mitem_props stop_in='' stop_out='' pause_in='' pause_out='' schedule_waitstart='' ItemType='8' FadeIn='-1' FadeOut='0' IsInsert='2' RandomPath='")
-            .Append(MovieJayAttr(path)).Append("' FileName='").Append(MovieJayAttr(path))
-            .Append("' SongTitle='").Append(MovieJayAttr(title))
-            .Append("' Artist='").Append(MovieJayAttr(artist))
-            .Append("' PlayListName='").Append(MovieJayAttr(playlistName))
-            .AppendLine("' Marker1='' Marker2='' Marker3='' Marker4='' Marker5='' PrgType='' PrgDetails='' Producer='' IsPlayed='0'>");
+        builder.Append("\t\t<mitem_props stop_in='' stop_out='' pause_in='' pause_out='' schedule_waitstart='' ItemType='8' FadeIn='-1' FadeOut='0' IsInsert='2' RandomPath=")
+            .Append(MovieJayQuoted(path)).Append(" FileName=").Append(MovieJayQuoted(path))
+            .Append(" SongTitle=").Append(MovieJayQuoted(title))
+            .Append(" Artist=").Append(MovieJayQuoted(artist))
+            .Append(" PlayListName=").Append(MovieJayQuoted(playlistName))
+            .AppendLine(" Marker1='' Marker2='' Marker3='' Marker4='' Marker5='' PrgType='' PrgDetails='' Producer='' IsPlayed='0'>");
         builder.AppendLine("\t\t\t<transition_in type='' time=''/>");
         builder.AppendLine("\t\t\t<transition_out type='' time=''/>");
         builder.AppendLine("\t\t\t<file/>");
@@ -156,17 +156,19 @@ public sealed class PlaylistExportService
     }
 
     /// <summary>
-    /// MovieJay conserve & et l'apostrophe dans les attributs.
-    /// Il ne décode pas les entités XML : un nom encodé ne correspond plus au fichier.
+    /// MovieJay garde & et l'apostrophe tels quels. Un nom qui contient une apostrophe
+    /// est mis entre guillemets doubles, comme dans les playlists enregistrées par MovieJay.
     /// </summary>
-    private static string MovieJayAttr(string value)
+    private static string MovieJayQuoted(string value)
     {
         var text = value
             .Replace("&amp;", "&", StringComparison.Ordinal)
-            .Replace("&apos;", "'", StringComparison.Ordinal);
-        return text
+            .Replace("&apos;", "'", StringComparison.Ordinal)
+            .Replace("&quot;", "\"", StringComparison.Ordinal)
             .Replace("<", "&lt;", StringComparison.Ordinal)
             .Replace(">", "&gt;", StringComparison.Ordinal);
+        var quote = text.Contains('\'') ? '"' : '\'';
+        return quote + text + quote;
     }
 
     /// <summary>
