@@ -41,7 +41,7 @@ public sealed class Clip
     public string LanguageName { get; set; } = string.Empty;
 
     public string LanguageLabel => string.IsNullOrWhiteSpace(LanguageName)
-        ? Language.ToDisplayName()
+        ? string.Empty
         : LanguageName;
 
     public ClipTheme Theme { get; set; } = ClipTheme.Amour;

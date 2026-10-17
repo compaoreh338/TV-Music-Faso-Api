@@ -434,7 +434,10 @@ public sealed class ProgrammingEngine
             return true;
         }
 
-        return !string.Equals(clip.LanguageLabel, last.LanguageLabel, StringComparison.CurrentCultureIgnoreCase)
+        var sameLanguage = !string.IsNullOrWhiteSpace(clip.LanguageLabel)
+            && !string.IsNullOrWhiteSpace(last.LanguageLabel)
+            && string.Equals(clip.LanguageLabel, last.LanguageLabel, StringComparison.CurrentCultureIgnoreCase);
+        return !sameLanguage
             && clip.Genre != last.Genre
             && clip.Id != last.Id;
     }

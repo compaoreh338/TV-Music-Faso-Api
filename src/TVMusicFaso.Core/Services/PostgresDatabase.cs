@@ -156,28 +156,6 @@ public static class PostgresDatabase
             clips.EnsureInitialized(InstallSeeder.SeededLibrary());
         }
 
-        BackfillLanguageNames(connection);
-    }
-
-    private static void BackfillLanguageNames(NpgsqlConnection connection)
-    {
-        foreach (var seed in LanguageCatalog.BurkinaAndFrench)
-        {
-            using var command = new NpgsqlCommand(
-                """
-                UPDATE clips SET language_name = @label
-                WHERE language_name = '' AND language = @enum;
-                """,
-                connection);
-            command.Parameters.AddWithValue("label", seed.Label);
-            command.Parameters.AddWithValue("enum", (int)seed.EnumValue);
-            command.ExecuteNonQuery();
-        }
-
-        using var fallback = new NpgsqlCommand(
-            "UPDATE clips SET language_name = 'Autre' WHERE language_name = '';",
-            connection);
-        fallback.ExecuteNonQuery();
     }
 
     private static void InsertUser(
