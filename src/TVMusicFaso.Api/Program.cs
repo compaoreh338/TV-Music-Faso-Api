@@ -339,9 +339,18 @@ app.MapPut("/api/clips/{id:guid}", (Guid id, ClipWriteRequest body, HttpContext 
     if (existing is null) return Results.NotFound();
     var clip = body.ToClip(id);
     clip.LifetimePlayCount = existing.LifetimePlayCount;
-    clip.SubmitForValidation();
+    // Le statut ne vient jamais du client : la validation se fait à la création,
+    // une modification le garde, sauf un clip refusé qui repart « à valider ».
+    clip.ValidationStatus = existing.ValidationStatus;
+    clip.ValidationNote = existing.ValidationNote;
+    var resubmitted = existing.ValidationStatus == ClipValidationStatus.Rejected;
+    if (resubmitted)
+    {
+        clip.SubmitForValidation();
+    }
+
     composition.Clips.Update(clip);
-    composition.Audit.Write(session, "Édition clip", $"{clip.Title} (à valider)");
+    composition.Audit.Write(session, "Édition clip", resubmitted ? $"{clip.Title} (corrigé, à valider)" : clip.Title);
     return Results.Ok(ClipDto(clip));
 });
 
@@ -399,9 +408,28 @@ app.MapPost("/api/schedules/generate", (GenerateRequest body, HttpContext http, 
     if (body.Thematic == true)
     {
         var preset = ThematicPreset.All.FirstOrDefault(item => item.Name == body.Preset);
-        theme = preset?.Filter ?? new ThematicFilter(
-            Genre: Enum.TryParse<MusicalGenre>(body.Genre, out var parsed) ? parsed : null,
-            BurkinabeOnly: body.BurkinabeOnly == true);
+        var genres = (body.Genres ?? [])
+            .Select(name => Enum.TryParse<MusicalGenre>(name, out var value) ? value : (MusicalGenre?)null)
+            .OfType<MusicalGenre>()
+            .Distinct()
+            .ToList();
+        if (body.YearFrom is < 1900 or > 2100 || body.YearTo is < 1900 or > 2100)
+        {
+            return Results.BadRequest(new { message = "Année de sortie invalide (1900 à 2100)." });
+        }
+
+        theme = preset is not null && genres.Count == 0 && body.YearFrom is null && body.YearTo is null
+            ? preset.Filter
+            : new ThematicFilter(
+                Genre: genres.Count == 0 && Enum.TryParse<MusicalGenre>(body.Genre, out var parsed) ? parsed : null,
+                BurkinabeOnly: body.BurkinabeOnly == true,
+                Genres: genres,
+                YearFrom: body.YearFrom is { } from && body.YearTo is { } to ? Math.Min(from, to) : body.YearFrom,
+                YearTo: body.YearFrom is { } from2 && body.YearTo is { } to2 ? Math.Max(from2, to2) : body.YearTo);
+        if (!library.Any(clip => clip.IsReadyForProgramming && theme.Matches(clip)))
+        {
+            return Results.BadRequest(new { message = $"Aucun clip validé ne correspond à « {theme.Label} »." });
+        }
     }
 
     var engine = composition.Engine;
@@ -876,7 +904,17 @@ static object UserDto(AppUser user) => new
 };
 
 public sealed record LoginRequest(string? UserName, string? Password);
-public sealed record GenerateRequest(string? Date, bool? Thematic, string? Preset, string? Genre, bool? BurkinabeOnly, List<SlotRule>? Slots = null, List<string>? SlotKeys = null);
+public sealed record GenerateRequest(
+    string? Date,
+    bool? Thematic,
+    string? Preset,
+    string? Genre,
+    bool? BurkinabeOnly,
+    List<SlotRule>? Slots = null,
+    List<string>? SlotKeys = null,
+    List<string>? Genres = null,
+    int? YearFrom = null,
+    int? YearTo = null);
 public sealed record LockRequest(string? Date, string? Slot, int Position);
 public sealed record SaveScheduleRequest(string? Date, List<SavePlaylistRequest>? Playlists);
 public sealed record SavePlaylistRequest(string? Slot, List<SaveItemRequest>? Items, string? Start = null, int? DurationMinutes = null);

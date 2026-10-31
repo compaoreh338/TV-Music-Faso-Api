@@ -6,17 +6,39 @@ public enum GenerationMode
     Thematic
 }
 
+/// <summary>
+/// Filtre de la programmation thématique : seuls les clips qui le respectent entrent dans la grille.
+/// </summary>
+/// <param name="Genre">Genre unique (préréglages « Spécial … »).</param>
+/// <param name="Genres">Plusieurs genres : le clip doit appartenir à l'un d'eux.</param>
+/// <param name="YearFrom">Année de sortie minimale du clip (incluse).</param>
+/// <param name="YearTo">Année de sortie maximale du clip (incluse).</param>
 public sealed record ThematicFilter(
     MusicalGenre? Genre = null,
     ClipTheme? Theme = null,
     ClipLanguage? Language = null,
-    bool BurkinabeOnly = false)
+    bool BurkinabeOnly = false,
+    IReadOnlyList<MusicalGenre>? Genres = null,
+    int? YearFrom = null,
+    int? YearTo = null)
 {
-    public bool IsEmpty => Genre is null && Theme is null && Language is null && !BurkinabeOnly;
+    public bool IsEmpty => Genre is null && Theme is null && Language is null && !BurkinabeOnly
+        && AllGenres.Count == 0 && YearFrom is null && YearTo is null;
+
+    /// <summary><see cref="Genre"/> et <see cref="Genres"/> réunis, sans doublon.</summary>
+    public IReadOnlyList<MusicalGenre> AllGenres =>
+        (Genres ?? []).Concat(Genre is { } single ? [single] : []).Distinct().ToList();
 
     public bool Matches(Clip clip)
     {
-        if (Genre is { } genre && clip.Genre != genre)
+        var genres = AllGenres;
+        if (genres.Count > 0 && !genres.Contains(clip.Genre))
+        {
+            return false;
+        }
+
+        var year = (int)clip.Year;
+        if ((YearFrom is { } from && year < from) || (YearTo is { } to && year > to))
         {
             return false;
         }
@@ -39,9 +61,15 @@ public sealed record ThematicFilter(
         get
         {
             var parts = new List<string>();
-            if (Genre is { } genre)
+            var genres = AllGenres;
+            if (genres.Count > 0)
             {
-                parts.Add(genre.ToDisplayName());
+                parts.Add(string.Join(" + ", genres.Select(genre => genre.ToDisplayName())));
+            }
+
+            if (YearLabel is { } years)
+            {
+                parts.Add(years);
             }
 
             if (Theme is { } theme)
@@ -62,6 +90,16 @@ public sealed record ThematicFilter(
             return parts.Count == 0 ? "Thématique" : "Spécial " + string.Join(" · ", parts);
         }
     }
+
+    /// <summary>« 2000 », « 2000–2005 », « depuis 2000 », « jusqu'à 2005 » ou null.</summary>
+    public string? YearLabel => (YearFrom, YearTo) switch
+    {
+        (null, null) => null,
+        ({ } from, { } to) when from == to => from.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        ({ } from, { } to) => $"{from}–{to}",
+        ({ } from, null) => $"depuis {from}",
+        (null, { } to) => $"jusqu'à {to}"
+    };
 }
 
 public sealed record ThematicPreset(string Name, ThematicFilter Filter)

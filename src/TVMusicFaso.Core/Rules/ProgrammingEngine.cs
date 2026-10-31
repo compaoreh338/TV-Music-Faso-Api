@@ -19,6 +19,33 @@ public sealed class ProgrammingEngine
         _random = seed.HasValue ? new Random(seed.Value) : new Random();
     }
 
+    private ProgrammingEngine(ProgrammingRules rules, SlotRuleCatalog slots, Random random)
+    {
+        _rules = rules;
+        _slots = slots;
+        _random = random;
+    }
+
+    /// <summary>
+    /// Moteur qui suit les tranches et plafonds actuels (modifiés depuis le lancement dans
+    /// « Tranches » ou « Contraintes ») ; les autres règles et le tirage aléatoire sont conservés.
+    /// </summary>
+    public ProgrammingEngine WithCurrentSettings(int defaultDailyPlayCap, int premiumDailyPlayCap, SlotRuleCatalog slots)
+    {
+        ArgumentNullException.ThrowIfNull(slots);
+        var rules = new ProgrammingRules
+        {
+            DefaultDailyPlayCap = Math.Max(1, defaultDailyPlayCap),
+            PremiumDailyPlayCap = Math.Max(1, premiumDailyPlayCap),
+            EnforceCulturalDiversity = _rules.EnforceCulturalDiversity,
+            PreferUnderPlayed = _rules.PreferUnderPlayed,
+            HitsReplayInEverySlot = _rules.HitsReplayInEverySlot,
+            PreferBurkinabeUntilTarget = _rules.PreferBurkinabeUntilTarget,
+            SlotFillLimit = _rules.SlotFillLimit
+        };
+        return new ProgrammingEngine(rules, slots, _random);
+    }
+
     public DaySchedule GenerateDay(
         IReadOnlyList<Clip> library,
         DateOnly date,
