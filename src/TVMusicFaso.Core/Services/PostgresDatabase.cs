@@ -5,11 +5,28 @@ namespace TVMusicFaso.Core.Services;
 
 public static class PostgresDatabase
 {
+    /// <summary>Bases dont le schéma a déjà été vérifié par ce processus : le script ne tourne qu'une fois, pas à chaque requête.</summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> SchemaReady = new(StringComparer.Ordinal);
+
     public static NpgsqlConnection Open(string connectionString)
     {
         var connection = new NpgsqlConnection(connectionString);
         connection.Open();
-        EnsureSchema(connection);
+        if (!SchemaReady.ContainsKey(connectionString))
+        {
+            try
+            {
+                EnsureSchema(connection);
+            }
+            catch
+            {
+                connection.Dispose();
+                throw;
+            }
+
+            SchemaReady[connectionString] = true;
+        }
+
         return connection;
     }
 
@@ -125,6 +142,13 @@ public static class PostgresDatabase
                 is_seeded BOOLEAN NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_languages_label ON languages (label);
+
+            CREATE TABLE IF NOT EXISTS genres (
+                id INTEGER PRIMARY KEY,
+                label TEXT NOT NULL,
+                is_seeded BOOLEAN NOT NULL DEFAULT FALSE,
+                is_archived BOOLEAN NOT NULL DEFAULT FALSE
+            );
 
             ALTER TABLE clips ADD COLUMN IF NOT EXISTS validation_status INTEGER NOT NULL DEFAULT 1;
             ALTER TABLE clips ADD COLUMN IF NOT EXISTS validation_note TEXT NOT NULL DEFAULT '';

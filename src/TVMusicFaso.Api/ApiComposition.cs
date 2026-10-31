@@ -16,6 +16,9 @@ public sealed class ApiComposition
         Auth.EnsureSeedUsers();
         Languages = new PostgresLanguageCatalog(connection);
         InstallSeeder.SeedLanguages(Languages);
+        Genres = new PostgresGenreCatalog(connection);
+        InstallSeeder.SeedGenres(Genres);
+        RefreshGenres();
         Schedules = new PostgresScheduleStore(connection);
         Broadcasts = new PostgresBroadcastLog(connection);
         Audit = new PostgresAuditLog(connection);
@@ -29,6 +32,45 @@ public sealed class ApiComposition
     public string? LibraryRoot { get; }
 
     public ILanguageCatalog Languages { get; }
+
+    /// <summary>Genres gérés dans l'écran « Genres » ; le registre des noms est rafraîchi après chaque changement.</summary>
+    public IGenreCatalog Genres { get; }
+
+    /// <summary>Un poste en connexion Postgres directe peut changer les genres sans passer par l'API.</summary>
+    private static readonly TimeSpan GenreRefreshInterval = TimeSpan.FromSeconds(15);
+
+    private readonly object _genreLock = new();
+    private DateTimeOffset _genresLoadedAt = DateTimeOffset.MinValue;
+
+    /// <summary>Recharge les noms des genres depuis la base ; renvoie la liste lue.</summary>
+    public IReadOnlyList<GenreDefinition> RefreshGenres()
+    {
+        lock (_genreLock)
+        {
+            var genres = Genres.GetAll();
+            GenreCatalog.Use(genres);
+            _genresLoadedAt = DateTimeOffset.UtcNow;
+            return genres;
+        }
+    }
+
+    /// <summary>Recharge les genres s'ils datent de plus de 15 s ; une panne de base garde la dernière liste.</summary>
+    public void RefreshGenresIfStale(ILogger logger)
+    {
+        if (DateTimeOffset.UtcNow - _genresLoadedAt < GenreRefreshInterval)
+        {
+            return;
+        }
+
+        try
+        {
+            RefreshGenres();
+        }
+        catch (Exception exception) when (exception is Npgsql.NpgsqlException or InvalidOperationException or TimeoutException)
+        {
+            logger.LogWarning(exception, "Genres non rechargés : la dernière liste connue reste utilisée.");
+        }
+    }
 
     public IClipRepository Clips { get; }
 

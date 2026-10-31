@@ -30,6 +30,16 @@ app.UseHttpsRedirection();
 app.UseCors("Spa");
 app.UseDefaultFiles();
 app.UseStaticFiles();
+app.Use(async (http, next) =>
+{
+    if (http.Request.Path.StartsWithSegments("/api") && !http.Request.Path.StartsWithSegments("/api/health"))
+    {
+        http.RequestServices.GetRequiredService<ApiComposition>()
+            .RefreshGenresIfStale(http.RequestServices.GetRequiredService<ILogger<ApiComposition>>());
+    }
+
+    await next();
+});
 
 app.MapGet("/api/health", (ApiComposition composition) =>
     Results.Ok(new
@@ -217,7 +227,7 @@ app.MapGet("/api/lookups", (HttpContext http, ApiComposition composition) =>
     if (composition.CurrentSession(http) is null) return Results.Unauthorized();
     return Results.Ok(new
     {
-        genres = EnumOptions<MusicalGenre>(),
+        genres = GenreCatalog.All.Select(genre => new { value = genre.ToString(), label = genre.ToDisplayName() }),
         languages = composition.Languages.GetAll().Select(item => new
         {
             value = item.Label,
@@ -255,6 +265,56 @@ app.MapPost("/api/languages", (LanguageWriteRequest body, HttpContext http, ApiC
     {
         return Results.BadRequest(new { message = exception.Message });
     }
+});
+
+app.MapGet("/api/genres", (HttpContext http, ApiComposition composition) =>
+{
+    if (composition.CurrentSession(http) is null) return Results.Unauthorized();
+    return Results.Ok(composition.RefreshGenres().Select(GenreDto));
+});
+
+app.MapPost("/api/genres", (GenreWriteRequest body, HttpContext http, ApiComposition composition) =>
+{
+    var session = composition.CurrentSession(http);
+    if (session is null) return Results.Unauthorized();
+    if (!session.Policy.CanManageSlots) return Denied();
+    return GenreChange(composition, () =>
+    {
+        var added = composition.Genres.Add(body.Label ?? string.Empty);
+        composition.Audit.Write(session, "Ajout genre", added.Label);
+        return Results.Ok(GenreDto(added));
+    });
+});
+
+app.MapPut("/api/genres/{id:int}", (int id, GenreWriteRequest body, HttpContext http, ApiComposition composition) =>
+{
+    var session = composition.CurrentSession(http);
+    if (session is null) return Results.Unauthorized();
+    if (!session.Policy.CanManageSlots) return Denied();
+    return GenreChange(composition, () =>
+    {
+        var previous = ((MusicalGenre)id).ToDisplayName();
+        var renamed = composition.Genres.Rename(id, body.Label ?? string.Empty);
+        composition.Audit.Write(session, "Renommage genre", $"{previous} → {renamed.Label}");
+        return Results.Ok(GenreDto(renamed));
+    });
+});
+
+app.MapDelete("/api/genres/{id:int}", (int id, int? replacement, HttpContext http, ApiComposition composition) =>
+{
+    var session = composition.CurrentSession(http);
+    if (session is null) return Results.Unauthorized();
+    if (!session.Policy.CanManageSlots) return Denied();
+    return GenreChange(composition, () =>
+    {
+        var label = ((MusicalGenre)id).ToDisplayName();
+        var moved = composition.Genres.Delete(id, replacement);
+        var detail = replacement is { } target && moved > 0
+            ? $"{label} ({moved} clip(s) → {((MusicalGenre)target).ToDisplayName()})"
+            : label;
+        composition.Audit.Write(session, "Suppression genre", detail);
+        return Results.Ok(new { reassigned = moved });
+    });
 });
 
 app.MapGet("/api/clips.csv", (HttpContext http, ApiComposition composition) =>
@@ -324,6 +384,7 @@ app.MapPost("/api/clips", (ClipWriteRequest body, HttpContext http, ApiCompositi
     if (session is null) return Results.Unauthorized();
     if (!session.Policy.CanSubmitClips) return Denied();
     var clip = body.ToClip(body.Id);
+    if (RejectArchivedGenre(clip, null) is { } archivedGenre) return archivedGenre;
     clip.SubmitForValidation();
     composition.Clips.Add(clip);
     composition.Audit.Write(session, "Création clip", $"{clip.Title} (à valider)");
@@ -338,6 +399,7 @@ app.MapPut("/api/clips/{id:guid}", (Guid id, ClipWriteRequest body, HttpContext 
     var existing = composition.Clips.GetById(id);
     if (existing is null) return Results.NotFound();
     var clip = body.ToClip(id);
+    if (RejectArchivedGenre(clip, existing) is { } archivedGenre) return archivedGenre;
     clip.LifetimePlayCount = existing.LifetimePlayCount;
     // Le statut ne vient jamais du client : la validation se fait à la création,
     // une modification le garde, sauf un clip refusé qui repart « à valider ».
@@ -758,6 +820,40 @@ app.Run();
 
 static IResult Denied() => Results.Json(new { message = "Accès refusé pour ce rôle." }, statusCode: 403);
 
+static object GenreDto(GenreDefinition genre) => new
+{
+    id = genre.Id,
+    label = genre.Label,
+    isSeeded = genre.IsSeeded,
+    isArchived = genre.IsArchived,
+    clipCount = genre.ClipCount
+};
+
+// Un clip ne peut pas recevoir un genre supprimé (formulaire resté ouvert pendant une suppression sur un autre poste).
+// Un clip qui avait déjà ce genre peut encore être enregistré sans changer de genre.
+static IResult? RejectArchivedGenre(Clip clip, Clip? existing) =>
+    GenreCatalog.IsActive(clip.Genre) || existing?.Genre == clip.Genre
+        ? null
+        : Results.BadRequest(new { message = $"Le genre « {clip.Genre.ToDisplayName()} » a été supprimé : choisissez-en un autre." });
+
+// Une règle refusée (nom en double, genre utilisé sans remplacement…) renvoie 400 avec le message ;
+// le registre des noms est rafraîchi dans tous les cas.
+static IResult GenreChange(ApiComposition composition, Func<IResult> change)
+{
+    try
+    {
+        return change();
+    }
+    catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
+    {
+        return Results.BadRequest(new { message = exception.Message });
+    }
+    finally
+    {
+        composition.RefreshGenres();
+    }
+}
+
 static DateOnly ParseDate(string? value) =>
     DateOnly.TryParse(value, out var date) ? date : DateOnly.FromDateTime(DateTime.Today);
 
@@ -904,6 +1000,7 @@ static object UserDto(AppUser user) => new
 };
 
 public sealed record LoginRequest(string? UserName, string? Password);
+public sealed record GenreWriteRequest(string? Label);
 public sealed record GenerateRequest(
     string? Date,
     bool? Thematic,

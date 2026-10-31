@@ -1,3 +1,5 @@
+using TVMusicFaso.Core.Services;
+
 namespace TVMusicFaso.Core.Domain;
 
 /// <summary>
@@ -211,6 +213,7 @@ public sealed class SlotRuleCatalog
         return allowed.Count == 0 || allowed.Contains(clip.Genre);
     }
 
+    /// <summary>Les 8 tranches de l’offre ; les genres supprimés dans l’écran « Genres » n’y figurent pas.</summary>
     public static IReadOnlyList<SlotRule> CreateDefault()
     {
         var douce = new[] { MusicalGenre.Gospel, MusicalGenre.Traditionnel, MusicalGenre.Slam, MusicalGenre.MusiqueMusulmane };
@@ -231,14 +234,14 @@ public sealed class SlotRuleCatalog
                 StartMinute = info.Start.Minute,
                 EndHour = end.Hour,
                 EndMinute = end.Minute,
-                AllowedGenres = (info.Mood switch
+                AllowedGenres = GenreCatalog.KeepActive(info.Mood switch
                 {
                     SlotMood.Douce => douce,
                     SlotMood.Energique => energique,
                     _ => melancolique
-                }).ToList(),
-                FridayGenres = friday.ToList(),
-                SundayGenres = sunday.ToList()
+                }),
+                FridayGenres = GenreCatalog.KeepActive(friday),
+                SundayGenres = GenreCatalog.KeepActive(sunday)
             };
         }).ToList();
     }

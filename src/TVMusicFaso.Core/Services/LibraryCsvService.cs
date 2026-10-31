@@ -312,7 +312,10 @@ public sealed class LibraryCsvService
             }
 
             var key = LanguageCatalog.Normalize(raw);
-            foreach (var value in Enum.GetValues<TEnum>())
+            var values = typeof(TEnum) == typeof(MusicalGenre)
+                ? GenreCatalog.All.Select(genre => (TEnum)(object)genre).ToList()
+                : Enum.GetValues<TEnum>().ToList();
+            foreach (var value in values)
             {
                 if (LanguageCatalog.Normalize(value.ToString()) == key
                     || LanguageCatalog.Normalize(value.ToDisplayName()) == key)

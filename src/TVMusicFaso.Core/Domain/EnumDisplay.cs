@@ -1,13 +1,19 @@
+using TVMusicFaso.Core.Services;
+
 namespace TVMusicFaso.Core.Domain;
 
 public static class EnumDisplay
 {
-    public static string ToDisplayName(this Enum value) =>
-        value is TimeSlot slot && CustomSlot.TryDecode(slot, out var start, out var end)
-            ? CustomSlot.Label(start, end)
-            : OfferedName(value);
+    public static string ToDisplayName(this Enum value) => value switch
+    {
+        TimeSlot slot when CustomSlot.TryDecode(slot, out var start, out var end) => CustomSlot.Label(start, end),
+        MusicalGenre genre when GenreCatalog.TryGetLabel(genre, out var label) => label,
+        MusicalGenre genre when !Enum.IsDefined(genre) => $"Genre {(int)genre}",
+        _ => OfferedName(value)
+    };
 
-    private static string OfferedName(Enum value) => value switch
+    /// <summary>Nom d'origine livré avec l'app (sans les renommages de l'écran « Genres »).</summary>
+    internal static string OfferedName(Enum value) => value switch
     {
         MusicalGenre.CoupeDecale => "Coupé-décalé",
         MusicalGenre.Slam => "Slam",
