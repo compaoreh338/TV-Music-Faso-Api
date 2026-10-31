@@ -647,7 +647,7 @@ app.MapGet("/api/security", (HttpContext http, ApiComposition composition) =>
         expiresAt = session.ExpiresAt.ToLocalTime().ToString("dd/MM/yyyy HH:mm"),
         lastBackup = composition.Backup.LastBackupPath,
         canManageBackup = session.Policy.CanManageBackup,
-        transport = "HTTPS obligatoire. Jeton Bearer, session 8 h. Le rôle n’est pas modifiable ici.",
+        transport = "HTTPS obligatoire. Jeton Bearer, session 30 jours. Le rôle n’est pas modifiable ici.",
         entries = composition.Audit.GetRecent().Select(entry => new
         {
             at = entry.AtLabel,

@@ -28,6 +28,9 @@ public sealed class AppUser
 
 public sealed class UserSession
 {
+    /// <summary>Un poste de régie reste connecté un mois, sauf déconnexion explicite.</summary>
+    public static readonly TimeSpan Lifetime = TimeSpan.FromDays(30);
+
     public required AppUser User { get; init; }
 
     public required string AccessToken { get; init; }

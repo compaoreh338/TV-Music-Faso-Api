@@ -51,7 +51,7 @@ public sealed class PostgresAuthService : IAuthService
     private static UserSession IssueSession(NpgsqlConnection connection, AppUser user, AppUser? impersonatedBy = null)
     {
         var token = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
-        var expires = DateTimeOffset.Now.AddHours(8);
+        var expires = DateTimeOffset.Now.Add(UserSession.Lifetime);
         using var insert = new NpgsqlCommand(
             "INSERT INTO sessions (token, user_id, expires_at) VALUES (@t, @u, @e);",
             connection);

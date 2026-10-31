@@ -63,7 +63,7 @@ public sealed class SqliteAuthService : IAuthService
     private static UserSession IssueSession(Microsoft.Data.Sqlite.SqliteConnection connection, AppUser user, AppUser? impersonatedBy = null)
     {
         var token = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
-        var expires = DateTimeOffset.Now.AddHours(8);
+        var expires = DateTimeOffset.Now.Add(UserSession.Lifetime);
         using var insert = connection.CreateCommand();
         insert.CommandText = "INSERT INTO sessions (Token, UserId, ExpiresAt) VALUES ($t, $u, $e);";
         insert.Parameters.AddWithValue("$t", token);
