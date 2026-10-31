@@ -253,13 +253,14 @@ public sealed class ProgrammingEngine
                 ?? CombinedSovereignty(schedule, playlist);
             var requireBurkinabe = _rules.PreferBurkinabeUntilTarget
                 && (daySovereignty < ProgrammingRules.SovereigntyTargetPercent || state.ForeignBudget <= 0);
-            var candidate = NextClip(last, requireBurkinabe, remaining);
+            var skipShortReplay = state.ShortestAlreadyPlayed();
+            var candidate = NextClip(last, requireBurkinabe, remaining, skipShortReplay);
             var closing = false;
             if (candidate is null)
             {
-                // Plus aucun clip ne tient dans le reste : on ferme avec le plus court du catalogue.
-                // Un Hit n'est pas utilisé ici, son quota quotidien reste pour les tranches de son genre.
-                candidate = state.ShortestNonHit(last) ?? NextClip(last, requireBurkinabe, null);
+                // Plus rien ne tient dans le reste. On prend le clip suivant,
+                // même s'il dépasse, et jamais le plus court déjà programmé.
+                candidate = NextClip(last, requireBurkinabe, null, skipShortReplay);
                 closing = candidate is not null;
             }
 
@@ -275,11 +276,6 @@ public sealed class ProgrammingEngine
             {
                 skippedHits.Add(candidate.Id);
                 state.Return(candidate);
-                if (closing)
-                {
-                    break;
-                }
-
                 continue;
             }
 
@@ -300,16 +296,20 @@ public sealed class ProgrammingEngine
             elapsed += candidate.Duration;
         }
 
-        return playlist;
+            return playlist;
 
-        Clip? NextClip(Clip? previous, bool burkinabeOnly, TimeSpan? maxDuration) =>
-            state.Pick(slotInfo, date.DayOfWeek, previous, thematic, _slots, _rules, burkinabeOnly, false, false, maxDuration, skippedHits)
-            ?? state.Pick(slotInfo, date.DayOfWeek, previous, thematic, _slots, _rules, burkinabeOnly, true, false, maxDuration, skippedHits)
-            ?? state.Pick(slotInfo, date.DayOfWeek, previous, thematic, _slots, _rules, burkinabeOnly, false, true, maxDuration, skippedHits)
-            ?? state.Pick(slotInfo, date.DayOfWeek, previous, thematic, _slots, _rules, burkinabeOnly, true, true, maxDuration, skippedHits)
-            ?? state.Pick(slotInfo, date.DayOfWeek, previous, thematic, _slots, _rules, false, true, true, maxDuration, skippedHits)
-            ?? state.Pick(slotInfo, date.DayOfWeek, previous, true, _slots, _rules, false, true, true, maxDuration, skippedHits)
-            ?? state.AnyEligible(previous, maxDuration, skippedHits);
+        Clip? NextClip(Clip? previous, bool burkinabeOnly, TimeSpan? maxDuration, IReadOnlySet<Guid>? avoid = null)
+        {
+            var skip = avoid is null || avoid.Count == 0
+                ? skippedHits
+                : skippedHits.Count == 0
+                    ? avoid
+                    : new HashSet<Guid>(skippedHits.Concat(avoid));
+            return state.Pick(slotInfo, date.DayOfWeek, previous, thematic, _slots, _rules, burkinabeOnly, false, false, maxDuration, skip)
+                ?? state.Pick(slotInfo, date.DayOfWeek, previous, thematic, _slots, _rules, burkinabeOnly, true, false, maxDuration, skip)
+                ?? state.Pick(slotInfo, date.DayOfWeek, previous, thematic, _slots, _rules, false, false, false, maxDuration, skip)
+                ?? state.Pick(slotInfo, date.DayOfWeek, previous, true, _slots, _rules, false, true, false, maxDuration, skip);
+        }
     }
 
     private void EnsureHitsInSlot(Playlist playlist, BucketIndex state)
@@ -435,6 +435,7 @@ public sealed class ProgrammingEngine
             }
 
             if (replacement is null || !replacement.IsBurkinabe
+                || foreign.playlist.TotalDuration - foreign.item.Clip.Duration + replacement.Duration < TargetDuration(slotInfo)
                 || !foreign.playlist.FitsReplacement(foreign.item.Clip, replacement))
             {
                 skipped.Add(foreign.item);
@@ -483,6 +484,26 @@ public sealed class ProgrammingEngine
         public IReadOnlyList<Clip> Hits => _catalog.Where(clip => clip.IsHit).ToList();
 
         public int ForeignBudget { get; private set; }
+
+        /// <summary>Le plus court déjà passé aujourd'hui. On ne le reprend pas pour boucher un trou.</summary>
+        public HashSet<Guid>? ShortestAlreadyPlayed()
+        {
+            Clip? shortest = null;
+            foreach (var clip in _catalog)
+            {
+                if (clip.IsHit || PlaysToday.GetValueOrDefault(clip.Id) <= 0)
+                {
+                    continue;
+                }
+
+                if (shortest is null || clip.Duration < shortest.Duration)
+                {
+                    shortest = clip;
+                }
+            }
+
+            return shortest is null ? null : new HashSet<Guid> { shortest.Id };
+        }
 
         public static BucketIndex Build(
             IReadOnlyList<Clip> catalog,
@@ -604,15 +625,17 @@ public sealed class ProgrammingEngine
             return best.Clip;
         }
 
-        public Clip? ShortestNonHit(Clip? last)
+        public Clip? ShortestNonHit(Clip? last, TimeSlot slot, DayOfWeek day, SlotRuleCatalog slots)
         {
-            var choices = _catalog.Where(clip => !clip.IsHit && (last is null || clip.Id != last.Id)).ToList();
-            if (choices.Count == 0)
-            {
-                choices = _catalog.Where(clip => !clip.IsHit).ToList();
-            }
-
-            var chosen = choices.OrderBy(clip => clip.Duration).FirstOrDefault();
+            // Le plus court du catalogue fermait chaque tranche. On tourne d'abord
+            // parmi les clips du genre, encore sous le plafond, et différents du précédent.
+            var chosen = Choose(cap: true, genre: true, diversity: true)
+                ?? Choose(cap: true, genre: true, diversity: false)
+                ?? Choose(cap: false, genre: true, diversity: true)
+                ?? Choose(cap: false, genre: true, diversity: false)
+                ?? Choose(cap: true, genre: false, diversity: true)
+                ?? Choose(cap: false, genre: false, diversity: true)
+                ?? Choose(cap: false, genre: false, diversity: false);
             if (chosen is null)
             {
                 return null;
@@ -624,6 +647,41 @@ public sealed class ProgrammingEngine
             }
 
             return chosen;
+
+            Clip? Choose(bool cap, bool genre, bool diversity) =>
+                _catalog.Where(clip => Fits(clip, cap, genre, diversity))
+                    .OrderBy(clip => PlaysToday.GetValueOrDefault(clip.Id))
+                    .ThenBy(clip => clip.Duration)
+                    .FirstOrDefault();
+
+            bool Fits(Clip clip, bool cap, bool genre, bool diversity)
+            {
+                if (clip.IsHit || (last is not null && clip.Id == last.Id))
+                {
+                    return false;
+                }
+
+                if (cap && Remaining.GetValueOrDefault(clip.Id) <= 0)
+                {
+                    return false;
+                }
+
+                if (genre && !slots.Matches(clip, slot, day))
+                {
+                    return false;
+                }
+
+                if (!diversity || last is null)
+                {
+                    return true;
+                }
+
+                var sameLanguage = clip.Language == last.Language
+                    || (!string.IsNullOrWhiteSpace(clip.LanguageLabel)
+                        && !string.IsNullOrWhiteSpace(last.LanguageLabel)
+                        && string.Equals(clip.LanguageLabel, last.LanguageLabel, StringComparison.CurrentCultureIgnoreCase));
+                return !sameLanguage && clip.Genre != last.Genre && RespectsDiversity(clip, last);
+            }
         }
 
         public Clip? AnyEligible(Clip? last, TimeSpan? maxDuration = null, IReadOnlySet<Guid>? skip = null)
