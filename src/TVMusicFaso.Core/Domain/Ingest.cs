@@ -496,10 +496,21 @@ public sealed class IngestPipelineStatus
     public string ToolUpdateResult { get; set; } = string.Empty;
 }
 
-/// <summary>Compteurs pour le menu et le tableau de bord.</summary>
-public sealed record IngestSummary(int New, int InProgress, int Ready, int NeedsAction, int SentThisWeek)
+/// <summary>
+/// Compteurs pour le menu et le tableau de bord. <paramref name="Total"/> et <paramref name="Revision"/>
+/// (augmente à chaque écriture d'une arrivée) permettent aux postes de ne recharger la liste que si elle a changé ;
+/// un serveur plus ancien les renvoie à 0.
+/// </summary>
+public sealed record IngestSummary(int New, int InProgress, int Ready, int NeedsAction, int SentThisWeek, int Total = 0, long Revision = 0)
 {
     /// <summary>Clips qui attendent quelqu'un : nouveaux, prêts, ou bloqués (refus technique, fichier à demander).</summary>
     [JsonIgnore]
     public int Pending => New + Ready + NeedsAction;
+
+    /// <summary>Empreinte de l'état des arrivées ; null si le serveur ne la fournit pas (rechargement systématique).</summary>
+    [JsonIgnore]
+    public string? ChangeStamp => Revision > 0 ? $"{Revision}:{Total}" : null;
 }
+
+/// <summary>Activité des arrivées sur une période : clips repérés sur les sources et fichiers téléchargés.</summary>
+public sealed record IngestActivity(int Detected, int Downloaded);

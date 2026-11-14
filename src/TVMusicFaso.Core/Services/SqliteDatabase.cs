@@ -115,6 +115,7 @@ internal static class SqliteDatabase
         AddColumn(connection, "clips", "SignedFilePath", "TEXT NOT NULL DEFAULT ''");
         AddColumn(connection, "clips", "SignatureStatus", "INTEGER NOT NULL DEFAULT 0");
         AddColumn(connection, "clips", "SignatureKey", "TEXT NOT NULL DEFAULT ''");
+        AddColumn(connection, "clips", "ReviewJson", "TEXT NOT NULL DEFAULT ''");
         AddColumn(connection, "clips", "SignedAt", "TEXT NULL");
     }
 

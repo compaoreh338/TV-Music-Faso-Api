@@ -92,6 +92,12 @@ public sealed class Clip
 
     public DateTime? SignedAt { get; set; }
 
+    /// <summary>Grille cochée, déclaration BBDA, retrait et fiche de suivi (enregistrés à part des métadonnées).</summary>
+    public ClipReview Review { get; set; } = new();
+
+    /// <summary>Retiré de l'antenne à la demande d'un tiers : jamais programmé tant qu'il n'est pas remis.</summary>
+    public bool IsWithdrawn => Review.IsWithdrawn;
+
     public bool HasSignedVersion => SignatureStatus != ClipSignatureStatus.None
         && !string.IsNullOrWhiteSpace(SignedFilePath);
 
@@ -107,15 +113,29 @@ public sealed class Clip
 
     public bool IsPendingValidation => ValidationStatus == ClipValidationStatus.Pending;
 
+    /// <summary>Clip venu de l'écran « Arrivées » (sources suivies ou dépôt de fichier).</summary>
+    public bool IsFromArrivals => Review.History.Any(entry => entry.Kind == ClipEventKind.Arrived);
+
+    /// <summary>
+    /// Clip arrivé « à valider » pas encore signé : il passe d'abord par l'écran Signature,
+    /// puis par l'écran Validation, où la validation du clip valide aussi sa signature.
+    /// </summary>
+    public bool IsAwaitingSignature => IsPendingValidation && IsFromArrivals && !IsWithdrawn && !HasSignedVersion;
+
+    /// <summary>Version signée rendue mais pas encore vérifiée : la valider (ou valider le clip) la met à l'antenne.</summary>
+    public bool HasSignatureToReview => SignatureStatus == ClipSignatureStatus.ToReview && HasSignedVersion;
+
     /// <summary>Version signée vérifiée et validée : seule condition de signature pour passer à l'antenne.</summary>
     public bool IsSigned => SignatureStatus == ClipSignatureStatus.Approved
         && !string.IsNullOrWhiteSpace(SignedFilePath);
 
-    /// <summary>Programmable : conforme, validé et signé (la validation de la signature valide aussi le clip).</summary>
-    public bool IsReadyForProgramming => IsMorallyCompliant && IsValidated && IsSigned;
+    /// <summary>Programmable : non retiré, conforme, validé et signé (la validation de la signature valide aussi le clip).</summary>
+    public bool IsReadyForProgramming => !IsWithdrawn && IsMorallyCompliant && IsValidated && IsSigned;
 
     /// <summary>Raison pour laquelle le clip n'entre pas dans les grilles, ou vide s'il est programmable.</summary>
-    public string ProgrammingBlocker => !IsMorallyCompliant
+    public string ProgrammingBlocker => IsWithdrawn
+        ? "Retiré"
+        : !IsMorallyCompliant
         ? "Non conforme"
         : ValidationStatus == ClipValidationStatus.Rejected
             ? "Refusé"
@@ -129,7 +149,11 @@ public sealed class Clip
         ? "Programmable"
         : $"Non programmable : {ProgrammingBlocker.ToLowerInvariant()}";
 
-    public string ValidationLabel => ValidationStatus.ToDisplayName();
+    public string ValidationLabel => IsWithdrawn
+        ? "Retiré de l'antenne"
+        : IsAwaitingSignature
+            ? "À signer avant validation"
+            : ValidationStatus.ToDisplayName();
 
     public decimal DurationSeconds
     {
@@ -275,5 +299,6 @@ public sealed class Clip
         SignatureStatus = source.SignatureStatus;
         SignatureKey = source.SignatureKey;
         SignedAt = source.SignedAt;
+        Review = source.Review.Clone();
     }
 }

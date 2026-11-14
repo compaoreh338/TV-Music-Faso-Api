@@ -11,6 +11,9 @@ public sealed class InMemoryIngestStore : IIngestStore
     private readonly Dictionary<string, string> _values = new(StringComparer.Ordinal);
     private readonly Dictionary<(string Scope, string Field), string> _memory = [];
 
+    /// <summary>Numéro de la dernière écriture d'une arrivée (même rôle que la colonne revision de PostgreSQL).</summary>
+    private long _revision;
+
     public IReadOnlyList<MonitoredSource> GetSources()
     {
         lock (_lock)
@@ -94,6 +97,7 @@ public sealed class InMemoryIngestStore : IIngestStore
             }
 
             _items[item.Id] = item.Clone();
+            _revision++;
         }
     }
 
@@ -108,6 +112,7 @@ public sealed class InMemoryIngestStore : IIngestStore
             }
 
             _items[item.Id] = item.Clone();
+            _revision++;
         }
     }
 
@@ -127,6 +132,7 @@ public sealed class InMemoryIngestStore : IIngestStore
 
             next.Stage = to;
             next.UpdatedAt = now;
+            _revision++;
             return next.Clone();
         }
     }
@@ -139,6 +145,11 @@ public sealed class InMemoryIngestStore : IIngestStore
             foreach (var item in stuck)
             {
                 item.Stage = to;
+            }
+
+            if (stuck.Count > 0)
+            {
+                _revision++;
             }
 
             return stuck.Count;
@@ -183,7 +194,15 @@ public sealed class InMemoryIngestStore : IIngestStore
     {
         lock (_lock)
         {
-            return IngestStages.Summarize(_items.Values, since);
+            return IngestStages.Summarize(_items.Values, since, _revision);
+        }
+    }
+
+    public IngestActivity CountActivity(DateTimeOffset from, DateTimeOffset to)
+    {
+        lock (_lock)
+        {
+            return IngestStages.CountActivity(_items.Values, from, to);
         }
     }
 

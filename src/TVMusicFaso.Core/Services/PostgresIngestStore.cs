@@ -249,7 +249,9 @@ public sealed class PostgresIngestStore : IIngestStore
                 COUNT(*) FILTER (WHERE stage IN (1, 2, 3, 4)),
                 COUNT(*) FILTER (WHERE stage = 5),
                 COUNT(*) FILTER (WHERE stage IN (6, 7)),
-                COUNT(*) FILTER (WHERE stage = 9 AND updated_at >= @since)
+                COUNT(*) FILTER (WHERE stage = 9 AND updated_at >= @since),
+                COUNT(*),
+                COALESCE(MAX(revision), 0)
             FROM ingest_items;
             """,
             connection);
@@ -261,7 +263,28 @@ public sealed class PostgresIngestStore : IIngestStore
             (int)reader.GetInt64(1),
             (int)reader.GetInt64(2),
             (int)reader.GetInt64(3),
-            (int)reader.GetInt64(4));
+            (int)reader.GetInt64(4),
+            (int)reader.GetInt64(5),
+            reader.GetInt64(6));
+    }
+
+    public IngestActivity CountActivity(DateTimeOffset from, DateTimeOffset to)
+    {
+        using var connection = Open();
+        using var command = new NpgsqlCommand(
+            """
+            SELECT
+                COUNT(*) FILTER (WHERE detected_at >= @from AND detected_at < @to),
+                COUNT(*) FILTER (WHERE (data->>'downloadedAt')::timestamptz >= @from
+                                   AND (data->>'downloadedAt')::timestamptz < @to)
+            FROM ingest_items;
+            """,
+            connection);
+        command.Parameters.AddWithValue("from", from.ToUniversalTime());
+        command.Parameters.AddWithValue("to", to.ToUniversalTime());
+        using var reader = command.ExecuteReader();
+        reader.Read();
+        return new IngestActivity((int)reader.GetInt64(0), (int)reader.GetInt64(1));
     }
 
     private NpgsqlConnection Open()
@@ -298,6 +321,10 @@ public sealed class PostgresIngestStore : IIngestStore
                 data JSONB NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_ingest_items_stage ON ingest_items (stage, priority DESC, detected_at);
+            CREATE SEQUENCE IF NOT EXISTS ingest_items_revision;
+            ALTER TABLE ingest_items ADD COLUMN IF NOT EXISTS revision BIGINT NOT NULL DEFAULT nextval('ingest_items_revision');
+            CREATE INDEX IF NOT EXISTS idx_ingest_items_revision ON ingest_items (revision);
+            CREATE INDEX IF NOT EXISTS idx_ingest_items_detected ON ingest_items (detected_at DESC);
             CREATE UNIQUE INDEX IF NOT EXISTS idx_ingest_items_external ON ingest_items (external_id) WHERE external_id <> '';
             CREATE TABLE IF NOT EXISTS ingest_values (
                 key TEXT PRIMARY KEY,
@@ -322,6 +349,7 @@ public sealed class PostgresIngestStore : IIngestStore
             """
             UPDATE ingest_items SET stage = @stage, external_id = @external, detected_at = @detected,
                 next_attempt_at = @next, updated_at = @updated, data = @data,
+                revision = nextval('ingest_items_revision'),
                 priority = COALESCE((SELECT priority FROM ingest_sources WHERE id = @source), priority)
             WHERE id = @id;
             """,

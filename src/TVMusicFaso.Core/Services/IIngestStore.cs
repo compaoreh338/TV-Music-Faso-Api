@@ -46,6 +46,9 @@ public interface IIngestStore
     void Remember(string scope, string field, string value);
 
     IngestSummary Summarize(DateTimeOffset since);
+
+    /// <summary>Clips repérés et fichiers téléchargés entre <paramref name="from"/> (inclus) et <paramref name="to"/> (exclu).</summary>
+    IngestActivity CountActivity(DateTimeOffset from, DateTimeOffset to);
 }
 
 /// <summary>Sérialisation commune (base, API, postes) et accès typé aux réglages partagés.</summary>

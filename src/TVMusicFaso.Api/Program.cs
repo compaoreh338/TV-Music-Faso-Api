@@ -1,3 +1,5 @@
+using System.IO.Compression;
+using Microsoft.AspNetCore.ResponseCompression;
 using TVMusicFaso.Api;
 using TVMusicFaso.Core.Domain;
 using TVMusicFaso.Core.Rules;
@@ -9,6 +11,15 @@ builder.Services.AddSwaggerGen();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddSingleton<ApiComposition>();
 builder.Services.AddHostedService<IngestHostedService>();
+builder.Services.AddResponseCompression(options =>
+{
+    options.EnableForHttps = true;
+    options.Providers.Add<BrotliCompressionProvider>();
+    options.Providers.Add<GzipCompressionProvider>();
+    options.MimeTypes = ["application/json"];
+});
+builder.Services.Configure<BrotliCompressionProviderOptions>(options => options.Level = CompressionLevel.Fastest);
+builder.Services.Configure<GzipCompressionProviderOptions>(options => options.Level = CompressionLevel.Fastest);
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("Spa", policy =>
@@ -28,6 +39,10 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
+// Listes JSON compressées (clips, arrivées) ; jamais les réponses d'authentification, qui portent le jeton (BREACH).
+app.UseWhen(
+    http => !http.Request.Path.StartsWithSegments("/api/auth"),
+    branch => branch.UseResponseCompression());
 app.UseCors("Spa");
 app.UseDefaultFiles();
 app.UseStaticFiles();
@@ -387,6 +402,8 @@ app.MapPost("/api/clips", (ClipWriteRequest body, HttpContext http, ApiCompositi
     var clip = body.ToClip(body.Id);
     if (RejectArchivedGenre(clip, null) is { } archivedGenre) return archivedGenre;
     clip.SubmitForValidation();
+    clip.Review = new ClipReview();
+    clip.Review.Record(ClipEventKind.Created, session.DisplayName, "Fiche créée dans la médiathèque (à valider)");
     composition.Clips.Add(clip);
     composition.Audit.Write(session, "Création clip", $"{clip.Title} (à valider)");
     return Results.Created($"/api/clips/{clip.Id}", ClipDto(clip));
@@ -407,9 +424,18 @@ app.MapPut("/api/clips/{id:guid}", (Guid id, ClipWriteRequest body, HttpContext 
         return Results.BadRequest(new { message = "Signature invalide : statut inconnu ou fichier signé manquant." });
     }
 
-    var signatureChanged = clip.SignatureStatus != existing.SignatureStatus
-        || !string.Equals(clip.SignedFilePath, existing.SignedFilePath, StringComparison.Ordinal)
-        || !string.Equals(clip.SignatureKey, existing.SignatureKey, StringComparison.Ordinal);
+    // Nouveau fichier vidéo : l'ancienne signature ne le couvre pas, le clip repasse « à signer ».
+    var withdrawnForNewFile = existing.SignatureStatus != ClipSignatureStatus.None
+        && !string.Equals(clip.FilePath, existing.FilePath, StringComparison.Ordinal);
+    if (withdrawnForNewFile)
+    {
+        clip.WithdrawSignature();
+    }
+
+    var signatureChanged = !withdrawnForNewFile
+        && (clip.SignatureStatus != existing.SignatureStatus
+            || !string.Equals(clip.SignedFilePath, existing.SignedFilePath, StringComparison.Ordinal)
+            || !string.Equals(clip.SignatureKey, existing.SignatureKey, StringComparison.Ordinal));
     if (signatureChanged && !session.Policy.CanValidateClips) return Denied();
     if (signatureChanged && clip.SignatureStatus != ClipSignatureStatus.None
         && existing.ValidationStatus == ClipValidationStatus.Rejected)
@@ -437,11 +463,33 @@ app.MapPut("/api/clips/{id:guid}", (Guid id, ClipWriteRequest body, HttpContext 
     }
 
     composition.Clips.Update(clip);
+    clip.Review = existing.Review;
+    if (resubmitted || withdrawnForNewFile)
+    {
+        var review = existing.Review.Clone();
+        if (resubmitted)
+        {
+            review.Record(ClipEventKind.Resubmitted, session.DisplayName, "Fiche corrigée après refus, renvoyée en validation");
+        }
+
+        if (withdrawnForNewFile)
+        {
+            review.Record(ClipEventKind.SignatureWithdrawn, session.DisplayName, "Nouveau fichier vidéo : signature retirée, à signer");
+        }
+
+        composition.Clips.SaveReview(id, review);
+        clip.Review = review;
+    }
+
     composition.Audit.Write(session, "Édition clip", resubmitted ? $"{clip.Title} (corrigé, à valider)" : clip.Title);
     if (signatureChanged)
     {
         composition.Audit.Write(session, "Signature clip",
             $"{clip.Artist} — {clip.Title} : {clip.SignatureLabel}{(validatedBySignature ? " (clip validé avec sa signature)" : string.Empty)}");
+    }
+    else if (withdrawnForNewFile)
+    {
+        composition.Audit.Write(session, "Signature clip", $"{clip.Artist} — {clip.Title} : retirée (nouveau fichier vidéo, à signer)");
     }
     return Results.Ok(ClipDto(clip));
 });
@@ -467,6 +515,44 @@ app.MapPut("/api/clips/{id:guid}/reject", (Guid id, ClipValidationRequest body, 
     if (existing is null) return Results.NotFound();
     composition.Clips.SetValidation(id, ClipValidationStatus.Rejected, body.Note);
     composition.Audit.Write(session, "Refus clip", existing.Title);
+    return Results.Ok(ClipDto(composition.Clips.GetById(id)!));
+});
+
+app.MapPut("/api/clips/{id:guid}/review", (Guid id, ClipReviewRequest body, HttpContext http, ApiComposition composition) =>
+{
+    var session = composition.CurrentSession(http);
+    if (session is null) return Results.Unauthorized();
+    var canValidate = session.Policy.CanValidateClips;
+    if (!canValidate && !session.Policy.CanSubmitClips) return Denied();
+    if (string.IsNullOrWhiteSpace(body.ReviewJson) || body.ReviewJson.Length > ClipReviewRequest.MaxLength)
+    {
+        return Results.BadRequest(new { message = "Revue absente ou trop volumineuse." });
+    }
+
+    var existing = composition.Clips.GetById(id);
+    if (existing is null) return Results.NotFound();
+    ClipReview merged;
+    try
+    {
+        var incoming = System.Text.Json.JsonSerializer.Deserialize<ClipReview>(body.ReviewJson, ClipReviewRequest.JsonOptions)
+            ?? throw new ArgumentException("Revue illisible.");
+        merged = ClipReviewPolicy.Merge(existing.Review, incoming, canValidate, session.DisplayName, DateTimeOffset.UtcNow);
+    }
+    catch (System.Text.Json.JsonException)
+    {
+        return Results.BadRequest(new { message = "Revue illisible." });
+    }
+    catch (ArgumentException exception)
+    {
+        return Results.BadRequest(new { message = exception.Message });
+    }
+
+    composition.Clips.SaveReview(id, merged);
+    var added = merged.History.Where(entry => existing.Review.History.All(old => old.Id != entry.Id)).ToList();
+    var summary = added.Count > 0
+        ? string.Join(" ; ", added.Select(entry => $"{entry.KindLabel} : {entry.Details}"))
+        : "revue mise à jour";
+    composition.Audit.Write(session, "Revue clip", $"{existing.Artist} — {existing.Title} : {summary}");
     return Results.Ok(ClipDto(composition.Clips.GetById(id)!));
 });
 
@@ -982,7 +1068,9 @@ static object ClipDto(Clip clip) => new
     signatureStatus = clip.SignatureStatus.ToString(),
     signatureLabel = clip.SignatureLabel,
     signatureKey = clip.SignatureKey,
-    signedAt = clip.SignedAt is { } signedAt ? new DateTimeOffset(signedAt.ToUniversalTime()) : (DateTimeOffset?)null
+    signedAt = clip.SignedAt is { } signedAt ? new DateTimeOffset(signedAt.ToUniversalTime()) : (DateTimeOffset?)null,
+    isWithdrawn = clip.IsWithdrawn,
+    reviewJson = clip.Review.ToJson()
 };
 
 static object ScheduleDto(DaySchedule? schedule, DateOnly date) => new
@@ -1063,6 +1151,19 @@ public sealed record PasswordRequest(string? CurrentPassword, string? NewPasswor
 public sealed record UserWriteRequest(string? FullName, string? UserName, string? Password, string? Role, bool? IsActive);
 public sealed record UserPasswordRequest(string? Password);
 public sealed record ClipValidationRequest(string? Note);
+
+/// <summary>Revue d'un clip envoyée en JSON texte (format de <see cref="ClipReview.ToJson"/>).</summary>
+public sealed record ClipReviewRequest(string? ReviewJson)
+{
+    public const int MaxLength = 512 * 1024;
+
+    public static readonly System.Text.Json.JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase,
+        PropertyNameCaseInsensitive = true,
+        Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() }
+    };
+}
 public sealed record LanguageWriteRequest(string? Label);
 public sealed record ClipWriteRequest(
     Guid? Id,

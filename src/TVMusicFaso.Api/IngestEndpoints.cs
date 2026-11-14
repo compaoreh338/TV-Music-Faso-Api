@@ -73,6 +73,17 @@ public static class IngestEndpoints
         app.MapGet("/api/arrivals/summary", (HttpContext http, ApiComposition c) =>
             Run(http, c, (_, ingest) => Json(ingest.Summary())));
 
+        app.MapGet("/api/arrivals/activity", (string? from, string? to, HttpContext http, ApiComposition c) =>
+            Run(http, c, (_, ingest) =>
+            {
+                if (!TryParseInstant(from, out var start) || !TryParseInstant(to, out var end))
+                {
+                    throw new ArgumentException("Période attendue : from et to au format ISO 8601.");
+                }
+
+                return Json(ingest.Activity(start, end));
+            }));
+
         app.MapGet("/api/arrivals/{id:guid}", (Guid id, HttpContext http, ApiComposition c) =>
             Run(http, c, (_, ingest) => Json(ingest.Item(id))));
 
@@ -259,6 +270,10 @@ public static class IngestEndpoints
     }
 
     private static IResult Json<T>(T value) => Results.Json(value, IngestJson.Options);
+
+    private static bool TryParseInstant(string? value, out DateTimeOffset instant) =>
+        DateTimeOffset.TryParse(value, System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.RoundtripKind, out instant);
 
     private static IResult Run(HttpContext http, ApiComposition composition, Func<UserSession, IngestService, IResult> action) =>
         RunAsync(http, composition, (session, ingest) => Task.FromResult(action(session, ingest))).GetAwaiter().GetResult();

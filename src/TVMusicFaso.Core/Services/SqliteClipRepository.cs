@@ -49,6 +49,7 @@ public sealed class SqliteClipRepository : IClipRepository
         using var connection = SqliteDatabase.Open(_databasePath);
         using var command = CreateWriteCommand(connection, insert: true);
         Bind(command, clip);
+        command.Parameters.AddWithValue("$ReviewJson", clip.Review.ToJson());
         command.ExecuteNonQuery();
     }
 
@@ -75,6 +76,28 @@ public sealed class SqliteClipRepository : IClipRepository
 
     public void SetValidation(Guid id, ClipValidationStatus status, string? note = null) =>
         ClipValidation.Apply(this, id, status, note);
+
+    /// <summary>Revue seule (grille, BBDA, retrait, suivi) ; seule la conformité morale suit la grille cochée.</summary>
+    public void SaveReview(Guid id, ClipReview review)
+    {
+        ArgumentNullException.ThrowIfNull(review);
+        using var connection = SqliteDatabase.Open(_databasePath);
+        using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            UPDATE clips SET ReviewJson = $review,
+                IsMorallyCompliant = CASE WHEN $hasCompliance = 1 THEN $moral ELSE IsMorallyCompliant END
+            WHERE Id = $id;
+            """;
+        command.Parameters.AddWithValue("$id", id.ToString());
+        command.Parameters.AddWithValue("$review", review.ToJson());
+        command.Parameters.AddWithValue("$hasCompliance", review.HasCompliance ? 1 : 0);
+        command.Parameters.AddWithValue("$moral", review.MoralCriteriaMet ? 1 : 0);
+        if (command.ExecuteNonQuery() == 0)
+        {
+            throw new InvalidOperationException("Clip introuvable : revue non enregistrée.");
+        }
+    }
 
     public IReadOnlyList<Clip> Search(string? query, MusicalGenre? genre, ClipLanguage? language, bool? burkinabeOnly)
     {
@@ -115,14 +138,14 @@ public sealed class SqliteClipRepository : IClipRepository
                   IsMorallyCompliant, FilePath, LifetimePlayCount, CommitteeRating, PopularityScore,
                   SocialScore, ThumbnailPath, BroadcastFailureCount, LastBroadcastFailureNote,
                   ValidationStatus, ValidationNote, Label, SignedFilePath, SignatureStatus, SignatureKey,
-                  SignedAt)
+                  SignedAt, ReviewJson)
               VALUES (
                   $Id, $Title, $Artist, $Year, $OriginPlace, $FilmingLocation, $IsBurkinabe, $Quality, $Format,
                   $DurationTicks, $Genre, $Language, $LanguageName, $Theme, $Audience, $ImpactScore, $IsPremium,
                   $IsMorallyCompliant, $FilePath, $LifetimePlayCount, $CommitteeRating, $PopularityScore,
                   $SocialScore, $ThumbnailPath, $BroadcastFailureCount, $LastBroadcastFailureNote,
                   $ValidationStatus, $ValidationNote, $Label, $SignedFilePath, $SignatureStatus, $SignatureKey,
-                  $SignedAt);
+                  $SignedAt, $ReviewJson);
               """
             : """
               UPDATE clips SET
@@ -220,7 +243,8 @@ public sealed class SqliteClipRepository : IClipRepository
             SignedFilePath = ReadString(reader, "SignedFilePath"),
             SignatureStatus = ReadSignatureStatus(ReadInt(reader, "SignatureStatus")),
             SignatureKey = ReadString(reader, "SignatureKey"),
-            SignedAt = ReadTimestamp(reader, "SignedAt")
+            SignedAt = ReadTimestamp(reader, "SignedAt"),
+            Review = ClipReview.FromJson(ReadString(reader, "ReviewJson"))
         };
 
     private static ClipSignatureStatus ReadSignatureStatus(int value) =>

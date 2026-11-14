@@ -103,6 +103,27 @@ public static class EnumDisplay
         ClipSignatureStatus.ToReview => "Signé, à vérifier",
         ClipSignatureStatus.Approved => "Signé",
 
+        ComplianceCategory.Morale => "Morale",
+        ComplianceCategory.LigneEditoriale => "Ligne éditoriale",
+
+        BbdaDeclarationStatus.NotDeclared => "Non déclaré",
+        BbdaDeclarationStatus.InProgress => "Déclaration en cours",
+        BbdaDeclarationStatus.Declared => "Déclaré",
+        BbdaDeclarationStatus.Exempt => "Dispensé",
+
+        ClipEventKind.Created => "Création",
+        ClipEventKind.Arrived => "Arrivée",
+        ClipEventKind.Validated => "Validation",
+        ClipEventKind.Rejected => "Refus",
+        ClipEventKind.Signed => "Signature",
+        ClipEventKind.SignatureWithdrawn => "Signature retirée",
+        ClipEventKind.Withdrawn => "Retrait d'antenne",
+        ClipEventKind.Reinstated => "Remise à l'antenne",
+        ClipEventKind.Compliance => "Grille de conformité",
+        ClipEventKind.Bbda => "BBDA",
+        ClipEventKind.Note => "Note",
+        ClipEventKind.Resubmitted => "Renvoi en validation",
+
         _ => value.ToString()
     };
 }

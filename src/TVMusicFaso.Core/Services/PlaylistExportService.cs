@@ -48,7 +48,7 @@ public sealed class PlaylistExportService
         foreach (var playlist in schedule.Playlists)
         {
             builder.AppendLine($"# TV-Music Faso - {playlist.Slot.ToDisplayName()}");
-            foreach (var item in playlist.Items)
+            foreach (var item in playlist.Items.Where(item => !item.Clip.IsWithdrawn))
             {
                 builder.AppendLine($"#EXTINF:{(int)item.Clip.Duration.TotalSeconds},{item.Clip.Artist} - {item.Clip.Title}");
                 builder.AppendLine(FileOrFallback(item.Clip));
@@ -195,12 +195,13 @@ public sealed class PlaylistExportService
         return document.ToString();
     }
 
+    /// <summary>Éléments diffusables : un clip retiré de l'antenne après la génération n'est jamais exporté.</summary>
     private static IEnumerable<(FlattenedItem Item, TimeOnly Start)> Flatten(DaySchedule schedule)
     {
         foreach (var playlist in schedule.Playlists)
         {
             var cursor = playlist.SlotStart;
-            foreach (var item in playlist.Items)
+            foreach (var item in playlist.Items.Where(item => !item.Clip.IsWithdrawn))
             {
                 yield return (new FlattenedItem(playlist, item), cursor);
                 cursor = cursor.Add(item.Clip.Duration);

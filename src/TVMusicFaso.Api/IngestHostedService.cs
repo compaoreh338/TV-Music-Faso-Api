@@ -92,17 +92,19 @@ public sealed class IngestHostedService : BackgroundService
     {
         var store = _composition.IngestStore;
         var settings = store.LoadSettings();
-        var ytDlp = YtDlpDownloader.Locate(Configured(settings.YtDlpPath, "Ingest:YtDlpPath"));
-        var inspector = MediaInspector.Locate(Configured(settings.FfmpegPath, "Ingest:FfmpegPath"));
+        // Chemins des programmes : configuration du serveur uniquement (jamais la base, modifiable depuis les postes).
+        var ytDlp = YtDlpDownloader.Locate(_configuration["Ingest:YtDlpPath"]);
+        var inspector = MediaInspector.Locate(_configuration["Ingest:FfmpegPath"]);
         var ingestRoot = pipeline.IngestRoot(settings);
         var status = store.LoadStatus();
         var error = string.Empty;
 
         if (status.ToolUpdateRequested)
         {
-            status.ToolUpdateResult = await UpdateToolAsync(ytDlp, inspector, stoppingToken);
+            // Demande effacée avant l'essai : une mise à jour qui échoue n'est pas relancée à chaque cycle.
             store.SetToolUpdateRequested(false);
             status.ToolUpdateRequested = false;
+            status.ToolUpdateResult = await UpdateToolAsync(ytDlp, inspector, stoppingToken);
             _versionReadAt = DateTimeOffset.MinValue;
         }
 
@@ -187,6 +189,10 @@ public sealed class IngestHostedService : BackgroundService
             var result = await new YtDlpDownloader(ytDlp, inspector?.FfmpegPath).UpdateAsync(cancellationToken);
             return $"{DateTimeOffset.Now:dd/MM HH:mm} : {result}";
         }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return "Mise à jour impossible : délai dépassé.";
+        }
         catch (Exception exception) when (exception is InvalidOperationException or IOException or System.ComponentModel.Win32Exception)
         {
             return $"Mise à jour impossible : {exception.Message}";
@@ -213,9 +219,6 @@ public sealed class IngestHostedService : BackgroundService
         _versionOf = ytDlp;
         _versionReadAt = DateTimeOffset.UtcNow;
     }
-
-    private string? Configured(string fromSettings, string configurationKey) =>
-        string.IsNullOrWhiteSpace(fromSettings) ? _configuration[configurationKey] : fromSettings;
 
     private void TryWriteError(string message)
     {

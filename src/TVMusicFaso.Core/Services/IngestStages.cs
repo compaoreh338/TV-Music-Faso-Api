@@ -44,7 +44,7 @@ public static class IngestStages
         IngestFilter.InProgress => "En cours",
         IngestFilter.Ready => "Prêts à valider",
         IngestFilter.NeedsAction => "Bloqués (fichier, contrôle)",
-        IngestFilter.Sent => "Envoyés en validation",
+        IngestFilter.Sent => "Envoyés à la signature",
         IngestFilter.Ignored => "Ignorés",
         _ => "Tous"
     };
@@ -60,7 +60,7 @@ public static class IngestStages
         IngestStage.TechnicalRejected => "Refus technique",
         IngestStage.FileRequested => "Fichier à demander",
         IngestStage.Ignored => "Ignoré",
-        IngestStage.SentToValidation => "Envoyé en validation",
+        IngestStage.SentToValidation => "Envoyé à la signature",
         _ => stage.ToString()
     };
 
@@ -93,11 +93,13 @@ public static class IngestStages
         _ => "incertain"
     };
 
-    public static IngestSummary Summarize(IEnumerable<IngestItem> items, DateTimeOffset since)
+    /// <summary>Compteurs par étape ; <paramref name="revision"/> est le numéro de la dernière écriture du stockage.</summary>
+    public static IngestSummary Summarize(IEnumerable<IngestItem> items, DateTimeOffset since, long revision = 0)
     {
-        int fresh = 0, running = 0, ready = 0, blocked = 0, sent = 0;
+        int fresh = 0, running = 0, ready = 0, blocked = 0, sent = 0, total = 0;
         foreach (var item in items)
         {
+            total++;
             switch (item.Stage)
             {
                 case IngestStage.Detected:
@@ -118,6 +120,26 @@ public static class IngestStages
             }
         }
 
-        return new IngestSummary(fresh, running, ready, blocked, sent);
+        return new IngestSummary(fresh, running, ready, blocked, sent, total, revision);
+    }
+
+    /// <summary>Repérés et téléchargés dans [from ; to[ (dates de détection et de téléchargement).</summary>
+    public static IngestActivity CountActivity(IEnumerable<IngestItem> items, DateTimeOffset from, DateTimeOffset to)
+    {
+        int detected = 0, downloaded = 0;
+        foreach (var item in items)
+        {
+            if (item.DetectedAt >= from && item.DetectedAt < to)
+            {
+                detected++;
+            }
+
+            if (item.DownloadedAt is { } at && at >= from && at < to)
+            {
+                downloaded++;
+            }
+        }
+
+        return new IngestActivity(detected, downloaded);
     }
 }

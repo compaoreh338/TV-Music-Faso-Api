@@ -139,11 +139,15 @@ public sealed class IngestService
         ArgumentNullException.ThrowIfNull(sources);
         int added = 0, updated = 0, skipped = 0;
         var errors = new List<string>();
-        var existing = _store.GetSources();
+        var byUrl = new Dictionary<string, MonitoredSource>(StringComparer.OrdinalIgnoreCase);
+        foreach (var known in _store.GetSources())
+        {
+            byUrl.TryAdd(UrlKey(known.Url), known);
+        }
+
         foreach (var candidate in sources.Take(SourceListImport.MaxRows))
         {
-            var match = existing.FirstOrDefault(other =>
-                string.Equals(other.Url.TrimEnd('/'), candidate.Url?.Trim().TrimEnd('/'), StringComparison.OrdinalIgnoreCase));
+            byUrl.TryGetValue(UrlKey(YouTubeFeedReader.Normalize(candidate.Url)), out var match);
             var source = candidate.Clone();
             if (match is not null)
             {
@@ -153,6 +157,7 @@ public sealed class IngestService
             try
             {
                 SaveSourceQuietly(source, match);
+                byUrl[UrlKey(source.Url)] = source;
                 if (match is null)
                 {
                     added++;
@@ -179,6 +184,22 @@ public sealed class IngestService
     public IngestItem Item(Guid id) => _store.GetItem(id) ?? throw new InvalidOperationException("Clip arrivé introuvable.");
 
     public IngestSummary Summary() => _store.Summarize(_clock().AddDays(-7));
+
+    /// <summary>Repérés et téléchargés sur une période d'au plus un an (rapport hebdomadaire).</summary>
+    public IngestActivity Activity(DateTimeOffset from, DateTimeOffset to)
+    {
+        if (to <= from)
+        {
+            throw new ArgumentException("La fin de la période doit suivre son début.");
+        }
+
+        if (to - from > TimeSpan.FromDays(366))
+        {
+            throw new ArgumentException("Période limitée à un an.");
+        }
+
+        return _store.CountActivity(from, to);
+    }
 
     /// <summary>Met le clip en file de téléchargement (nouveau, fichier à demander, ignoré ou refusé).</summary>
     public IngestItem Queue(UserSession actor, Guid id)
@@ -209,7 +230,7 @@ public sealed class IngestService
         RequireNotBusy(item);
         if (item.Stage == IngestStage.SentToValidation)
         {
-            throw new InvalidOperationException("Clip déjà envoyé en validation : traitez-le depuis la médiathèque.");
+            throw new InvalidOperationException("Clip déjà envoyé à la signature : traitez-le depuis l'écran Signature.");
         }
 
         item.Stage = IngestStage.Ignored;
@@ -274,7 +295,7 @@ public sealed class IngestService
         RequireNotBusy(item);
         if (item.Stage == IngestStage.SentToValidation)
         {
-            throw new InvalidOperationException("Clip déjà envoyé en validation.");
+            throw new InvalidOperationException("Clip déjà envoyé à la signature.");
         }
 
         item.OriginalFilePath = storedPath;
@@ -335,14 +356,14 @@ public sealed class IngestService
         var item = Item(id);
         if (item.Stage != IngestStage.Ready)
         {
-            throw new InvalidOperationException("Seul un clip contrôlé et prêt peut être envoyé en validation.");
+            throw new InvalidOperationException("Seul un clip contrôlé et prêt peut être envoyé à la signature.");
         }
 
         var artist = final.Artist?.Trim() ?? string.Empty;
         var title = final.Title?.Trim() ?? string.Empty;
         if (artist.Length == 0 || title.Length == 0)
         {
-            throw new ArgumentException("Indiquez l'artiste et le titre avant l'envoi en validation.");
+            throw new ArgumentException("Indiquez l'artiste et le titre avant l'envoi à la signature.");
         }
 
         var duration = final.DurationSeconds > 0 ? final.DurationSeconds : (int)Math.Round(item.Report?.DurationSeconds ?? 0);
@@ -380,6 +401,16 @@ public sealed class IngestService
         ApplyLanguage(clip, final.LanguageName);
         clip.RecalculateImpact();
         clip.SubmitForValidation();
+        var origin = item.SourceName is { Length: > 0 } sourceName ? $"source « {sourceName} »" : "dépôt manuel";
+        clip.Review.Record(ClipEventKind.Arrived, actor.DisplayName,
+            $"Repéré le {item.DetectedAt.ToLocalTime():dd/MM/yyyy HH:mm} ({origin})", item.DetectedAt);
+        if (item.DownloadedAt is { } downloadedAt)
+        {
+            clip.Review.Record(ClipEventKind.Note, actor.DisplayName,
+                $"Fichier téléchargé le {downloadedAt.ToLocalTime():dd/MM/yyyy HH:mm}", downloadedAt);
+        }
+
+        clip.Review.Record(ClipEventKind.Created, actor.DisplayName, "Fiche créée et envoyée à la signature (validée dès la signature vérifiée)", _clock());
         _clips.Add(clip);
 
         _suggestions.RememberCorrections(item, final);
@@ -387,7 +418,7 @@ public sealed class IngestService
         item.ClipId = clip.Id;
         item.Stage = IngestStage.SentToValidation;
         item.StageNote = string.Empty;
-        Save(actor, item, "Clip arrivé envoyé en validation", $"{clip.Artist} – {clip.Title}");
+        Save(actor, item, "Clip arrivé envoyé à la signature", $"{clip.Artist} – {clip.Title}");
         return clip;
     }
 
@@ -399,8 +430,12 @@ public sealed class IngestService
         ArgumentNullException.ThrowIfNull(settings);
         var cleaned = settings.Clone();
         cleaned.IngestFolderName = cleaned.IngestFolderName?.Trim() ?? string.Empty;
-        cleaned.YtDlpPath = cleaned.YtDlpPath?.Trim() ?? string.Empty;
-        cleaned.FfmpegPath = cleaned.FfmpegPath?.Trim() ?? string.Empty;
+
+        // Les programmes lancés par le serveur ne se règlent jamais depuis l'écran : sinon un compte
+        // métier pourrait faire exécuter un fichier déposé. Ils viennent de la configuration du serveur.
+        var current = _store.LoadSettings();
+        cleaned.YtDlpPath = current.YtDlpPath;
+        cleaned.FfmpegPath = current.FfmpegPath;
         cleaned.StationName = cleaned.StationName?.Trim() ?? string.Empty;
         var errors = cleaned.Validate();
         if (errors.Count > 0)
@@ -438,6 +473,9 @@ public sealed class IngestService
         }
     }
 
+    /// <summary>Clé de comparaison d'un lien déjà nettoyé (casse et barre finale ignorées).</summary>
+    private static string UrlKey(string? url) => (url ?? string.Empty).Trim().TrimEnd('/');
+
     private void SaveSourceQuietly(MonitoredSource source, MonitoredSource? existing)
     {
         source.Name = source.Name?.Trim() ?? string.Empty;
@@ -469,21 +507,15 @@ public sealed class IngestService
     }
 
     /// <summary>
-    /// Lien nettoyé (https ajouté si absent) et plateforme YouTube reconnue d'après le lien ;
-    /// un lien YouTube inutilisable est refusé tout de suite plutôt qu'au passage du serveur.
+    /// Lien nettoyé (https ajouté si absent) et plateforme YouTube reconnue d'après le lien.
+    /// Seul YouTube est suivi : tout autre lien est refusé tout de suite plutôt qu'au passage du serveur.
     /// </summary>
     private static void PrepareUrl(MonitoredSource source)
     {
         source.Url = YouTubeFeedReader.Normalize(source.Url);
-        var youtube = YouTubeFeedReader.Classify(source.Url);
-        if (youtube is { } recognized && source.Platform is SourcePlatform.YouTubeChannel or SourcePlatform.YouTubePlaylist or SourcePlatform.Other)
-        {
-            source.Platform = recognized.Platform;
-        }
-        else if (youtube is null && source.IsAutomatic)
-        {
-            throw new ArgumentException(YouTubeFeedReader.UnrecognizedMessage);
-        }
+        var youtube = YouTubeFeedReader.Classify(source.Url)
+            ?? throw new ArgumentException(YouTubeFeedReader.UnrecognizedMessage);
+        source.Platform = youtube.Platform;
     }
 
     private void ApplyLanguage(Clip clip, string? languageName)

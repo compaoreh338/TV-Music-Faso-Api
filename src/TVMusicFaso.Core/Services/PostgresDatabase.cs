@@ -158,6 +158,7 @@ public static class PostgresDatabase
             ALTER TABLE clips ADD COLUMN IF NOT EXISTS signature_status INTEGER NOT NULL DEFAULT 0;
             ALTER TABLE clips ADD COLUMN IF NOT EXISTS signature_key TEXT NOT NULL DEFAULT '';
             ALTER TABLE clips ADD COLUMN IF NOT EXISTS signed_at TIMESTAMPTZ NULL;
+            ALTER TABLE clips ADD COLUMN IF NOT EXISTS review_json TEXT NOT NULL DEFAULT '';
             """,
             connection);
         command.ExecuteNonQuery();

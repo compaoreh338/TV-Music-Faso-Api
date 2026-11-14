@@ -48,6 +48,28 @@ public sealed class PostgresClipRepository : IClipRepository
     public void SetValidation(Guid id, ClipValidationStatus status, string? note = null) =>
         ClipValidation.Apply(this, id, status, note);
 
+    /// <summary>Revue seule (grille, BBDA, retrait, suivi) ; seule la conformité morale suit la grille cochée.</summary>
+    public void SaveReview(Guid id, ClipReview review)
+    {
+        ArgumentNullException.ThrowIfNull(review);
+        using var connection = PostgresDatabase.Open(_connectionString);
+        using var command = new NpgsqlCommand(
+            """
+            UPDATE clips SET review_json = @review,
+                is_morally_compliant = CASE WHEN @has_compliance THEN @moral ELSE is_morally_compliant END
+            WHERE id = @id;
+            """,
+            connection);
+        command.Parameters.AddWithValue("id", id);
+        command.Parameters.AddWithValue("review", review.ToJson());
+        command.Parameters.AddWithValue("has_compliance", review.HasCompliance);
+        command.Parameters.AddWithValue("moral", review.MoralCriteriaMet);
+        if (command.ExecuteNonQuery() == 0)
+        {
+            throw new InvalidOperationException("Clip introuvable : revue non enregistrée.");
+        }
+    }
+
     public IReadOnlyList<Clip> Search(string? query, MusicalGenre? genre, ClipLanguage? language, bool? burkinabeOnly) =>
         Query(
             """
@@ -140,6 +162,12 @@ public sealed class PostgresClipRepository : IClipRepository
         {
             Value = clip.SignedAt is { } signedAt ? signedAt.ToUniversalTime() : DBNull.Value
         });
+        if (insert)
+        {
+            // La revue ne s'écrit qu'à la création ; ensuite seulement par SaveReview.
+            command.Parameters.AddWithValue("review_json", clip.Review.ToJson());
+        }
+
         command.ExecuteNonQuery();
     }
 
@@ -183,7 +211,8 @@ public sealed class PostgresClipRepository : IClipRepository
             SignedFilePath = ReadOptionalString(reader, "signed_file_path"),
             SignatureStatus = ReadSignatureStatus(reader),
             SignatureKey = ReadOptionalString(reader, "signature_key"),
-            SignedAt = ReadOptionalTimestamp(reader, "signed_at")
+            SignedAt = ReadOptionalTimestamp(reader, "signed_at"),
+            Review = ClipReview.FromJson(ReadOptionalString(reader, "review_json"))
         };
 
     private static ClipSignatureStatus ReadSignatureStatus(NpgsqlDataReader reader)
@@ -247,14 +276,14 @@ public sealed class PostgresClipRepository : IClipRepository
             is_morally_compliant, file_path, lifetime_play_count, committee_rating, popularity_score,
             social_score, thumbnail_path, broadcast_failure_count, last_broadcast_failure_note,
             validation_status, validation_note, label, signed_file_path, signature_status, signature_key,
-            signed_at)
+            signed_at, review_json)
         VALUES (
             @id, @title, @artist, @year, @origin_place, @filming_location, @is_burkinabe, @quality, @format,
             @duration_ticks, @genre, @language, @language_name, @theme, @audience, @impact_score, @is_premium,
             @is_morally_compliant, @file_path, @lifetime_play_count, @committee_rating, @popularity_score,
             @social_score, @thumbnail_path, @broadcast_failure_count, @last_broadcast_failure_note,
             @validation_status, @validation_note, @label, @signed_file_path, @signature_status, @signature_key,
-            @signed_at);
+            @signed_at, @review_json);
         """;
 
     private const string UpdateSql =
