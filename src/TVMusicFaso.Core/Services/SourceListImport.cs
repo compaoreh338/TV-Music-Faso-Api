@@ -191,25 +191,36 @@ public static partial class SourceListImport
             return fallback;
         }
 
-        if (value.Contains("jour", StringComparison.Ordinal) || value.Contains("quotidien", StringComparison.Ordinal))
-        {
-            return 24 * 60;
-        }
-
-        if (value.Contains("semaine", StringComparison.Ordinal) || value.Contains("hebdo", StringComparison.Ordinal))
-        {
-            return 7 * 24 * 60;
-        }
+        // « 2 jours », « 3 semaines », « 1 mois », « mensuel » : un mot d'unité sans nombre vaut 1.
+        double? unitMinutes =
+            value.Contains("mois", StringComparison.Ordinal) || value.Contains("mensuel", StringComparison.Ordinal) ? CheckInterval.MinutesPerMonth
+            : value.Contains("semaine", StringComparison.Ordinal) || value.Contains("hebdo", StringComparison.Ordinal) ? 7 * CheckInterval.MinutesPerDay
+            : value.Contains("jour", StringComparison.Ordinal) || value.Contains("quotidien", StringComparison.Ordinal) ? CheckInterval.MinutesPerDay
+            : value.Contains("min", StringComparison.Ordinal) ? 1
+            : value.Contains('h') ? CheckInterval.MinutesPerHour
+            : null;
 
         var match = NumberPattern().Match(value);
-        if (!match.Success || !double.TryParse(match.Value.Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out var amount) || amount <= 0)
+        double amount;
+        if (match.Success && double.TryParse(match.Value.Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed))
+        {
+            if (parsed <= 0)
+            {
+                return fallback;
+            }
+
+            amount = parsed;
+        }
+        else if (unitMinutes is not null)
+        {
+            amount = 1;
+        }
+        else
         {
             return fallback;
         }
 
-        var minutes = value.Contains("min", StringComparison.Ordinal) || (minutesColumn && !value.Contains('h'))
-            ? amount
-            : amount * 60;
+        var minutes = amount * (unitMinutes ?? (minutesColumn ? 1 : CheckInterval.MinutesPerHour));
         return (int)Math.Clamp(Math.Round(minutes), MonitoredSource.MinCheckIntervalMinutes, MonitoredSource.MaxCheckIntervalMinutes);
     }
 

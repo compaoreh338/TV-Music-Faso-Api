@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json.Serialization;
 
 namespace TVMusicFaso.Core.Domain;
@@ -54,12 +55,103 @@ public enum InfoConfidence
     High = 2
 }
 
+/// <summary>Unité de saisie de la fréquence de passage d'une source.</summary>
+public enum CheckIntervalUnit
+{
+    Hours = 0,
+    Days = 1,
+    Months = 2
+}
+
+/// <summary>
+/// Fréquence de passage d'une source, stockée en minutes et saisie en heures, jours ou mois.
+/// Un mois compte 30 jours : le passage suivant est calculé depuis le dernier, pas au même quantième.
+/// </summary>
+public static class CheckInterval
+{
+    public const int MinutesPerHour = 60;
+
+    public const int MinutesPerDay = 24 * MinutesPerHour;
+
+    public const int MinutesPerMonth = 30 * MinutesPerDay;
+
+    /// <summary>Plage autorisée, pour les messages d'erreur.</summary>
+    public const string RangeLabel = "de 30 minutes à 12 mois";
+
+    /// <summary>Unités proposées à l'écran.</summary>
+    public static IReadOnlyList<CheckIntervalUnit> Units { get; } = [CheckIntervalUnit.Hours, CheckIntervalUnit.Days, CheckIntervalUnit.Months];
+
+    /// <summary>Nombre de minutes dans une unité.</summary>
+    /// <exception cref="ArgumentOutOfRangeException">Unité inconnue.</exception>
+    public static int MinutesPer(CheckIntervalUnit unit) => unit switch
+    {
+        CheckIntervalUnit.Hours => MinutesPerHour,
+        CheckIntervalUnit.Days => MinutesPerDay,
+        CheckIntervalUnit.Months => MinutesPerMonth,
+        _ => throw new ArgumentOutOfRangeException(nameof(unit), unit, "Unité de fréquence inconnue.")
+    };
+
+    /// <summary>Libellé de l'unité dans la liste déroulante.</summary>
+    public static string Label(CheckIntervalUnit unit) => unit switch
+    {
+        CheckIntervalUnit.Days => "jours",
+        CheckIntervalUnit.Months => "mois",
+        _ => "heures"
+    };
+
+    /// <summary>Minutes correspondant à la saisie ; null si la quantité est vide ou n'est pas positive.</summary>
+    public static int? ToMinutes(decimal? amount, CheckIntervalUnit unit)
+    {
+        if (amount is not { } value || value <= 0)
+        {
+            return null;
+        }
+
+        var minutes = Math.Round(value * MinutesPer(unit));
+        return minutes >= int.MaxValue ? int.MaxValue : (int)minutes;
+    }
+
+    /// <summary>Saisie la plus lisible pour une durée : mois ou jours si elle tombe juste, sinon heures (au dixième).</summary>
+    public static (decimal Amount, CheckIntervalUnit Unit) Split(int minutes)
+    {
+        if (minutes >= MinutesPerMonth && minutes % MinutesPerMonth == 0)
+        {
+            return (minutes / MinutesPerMonth, CheckIntervalUnit.Months);
+        }
+
+        if (minutes >= MinutesPerDay && minutes % MinutesPerDay == 0)
+        {
+            return (minutes / MinutesPerDay, CheckIntervalUnit.Days);
+        }
+
+        return (Math.Round(minutes / (decimal)MinutesPerHour, 1), CheckIntervalUnit.Hours);
+    }
+
+    /// <summary>Fréquence en clair, ex. « toutes les 6 h », « tous les 3 jours », « tous les mois ».</summary>
+    public static string Describe(int minutes)
+    {
+        if (minutes < MinutesPerHour)
+        {
+            return $"toutes les {Math.Max(0, minutes)} min";
+        }
+
+        var (amount, unit) = Split(minutes);
+        var text = amount.ToString("0.#", CultureInfo.CurrentCulture);
+        return unit switch
+        {
+            CheckIntervalUnit.Months => amount == 1 ? "tous les mois" : $"tous les {text} mois",
+            CheckIntervalUnit.Days => amount == 1 ? "tous les jours" : $"tous les {text} jours",
+            _ => $"toutes les {text} h"
+        };
+    }
+}
+
 /// <summary>Chaîne, liste de lecture ou compte suivi (M1).</summary>
 public sealed class MonitoredSource
 {
     public const int MinCheckIntervalMinutes = 30;
 
-    public const int MaxCheckIntervalMinutes = 7 * 24 * 60;
+    public const int MaxCheckIntervalMinutes = 12 * CheckInterval.MinutesPerMonth;
 
     public Guid Id { get; set; } = Guid.NewGuid();
 
@@ -137,7 +229,7 @@ public sealed class MonitoredSource
 
         if (CheckIntervalMinutes is < MinCheckIntervalMinutes or > MaxCheckIntervalMinutes)
         {
-            errors.Add("La fréquence de passage va de 30 minutes à 7 jours.");
+            errors.Add($"La fréquence de passage va {CheckInterval.RangeLabel}.");
         }
 
         if (!string.IsNullOrWhiteSpace(ContactEmail) && !ContactEmail.Contains('@', StringComparison.Ordinal))
@@ -444,7 +536,7 @@ public sealed class IngestSettings
 
         if (DefaultCheckIntervalMinutes is < MonitoredSource.MinCheckIntervalMinutes or > MonitoredSource.MaxCheckIntervalMinutes)
         {
-            errors.Add("Fréquence de passage par défaut : de 30 minutes à 7 jours.");
+            errors.Add($"Fréquence de passage par défaut : {CheckInterval.RangeLabel}.");
         }
 
         if (MinDurationSeconds < 0 || MaxDurationSeconds <= MinDurationSeconds || MaxDurationSeconds > 3 * 3600)
