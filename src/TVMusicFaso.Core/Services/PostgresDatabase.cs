@@ -153,6 +153,11 @@ public static class PostgresDatabase
             ALTER TABLE clips ADD COLUMN IF NOT EXISTS validation_status INTEGER NOT NULL DEFAULT 1;
             ALTER TABLE clips ADD COLUMN IF NOT EXISTS validation_note TEXT NOT NULL DEFAULT '';
             ALTER TABLE clips ADD COLUMN IF NOT EXISTS language_name TEXT NOT NULL DEFAULT '';
+            ALTER TABLE clips ADD COLUMN IF NOT EXISTS label TEXT NOT NULL DEFAULT '';
+            ALTER TABLE clips ADD COLUMN IF NOT EXISTS signed_file_path TEXT NOT NULL DEFAULT '';
+            ALTER TABLE clips ADD COLUMN IF NOT EXISTS signature_status INTEGER NOT NULL DEFAULT 0;
+            ALTER TABLE clips ADD COLUMN IF NOT EXISTS signature_key TEXT NOT NULL DEFAULT '';
+            ALTER TABLE clips ADD COLUMN IF NOT EXISTS signed_at TIMESTAMPTZ NULL;
             """,
             connection);
         command.ExecuteNonQuery();

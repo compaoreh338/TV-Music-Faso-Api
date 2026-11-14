@@ -26,7 +26,7 @@ public sealed class LibraryCsvService
     /// <summary>En-tête de l'export ; les dix premières colonnes gardent l'ordre historique (anciens serveurs).</summary>
     public const string Header =
         "Titre;Artiste;Annee;Langue;Genre;Theme;Cible;Origine;DureeSecondes;Fichier;" +
-        "LieuOrigine;LieuTournage;Qualite;Format;Premium;NoteComite;Popularite;Reseaux;Vignette";
+        "LieuOrigine;LieuTournage;Qualite;Format;Premium;NoteComite;Popularite;Reseaux;Vignette;Label";
 
     /// <summary>Modèle proposé à l'utilisateur : une ligne complète, des lignes partielles, une ligne avec le seul chemin.</summary>
     public static string SampleCsv { get; } = string.Join(Environment.NewLine,
@@ -58,7 +58,8 @@ public sealed class LibraryCsvService
         CommitteeRating,
         Popularity,
         Social,
-        Thumbnail
+        Thumbnail,
+        RecordLabel
     }
 
     private static readonly Dictionary<string, Column> HeaderAliases = BuildAliases();
@@ -202,7 +203,8 @@ public sealed class LibraryCsvService
                 clip.CommitteeRating.ToString("0.#", CultureInfo.InvariantCulture),
                 clip.PopularityScore.ToString("0.#", CultureInfo.InvariantCulture),
                 clip.SocialScore.ToString("0.#", CultureInfo.InvariantCulture),
-                clip.ThumbnailPath
+                clip.ThumbnailPath,
+                clip.Label
             }.Select(Escape)));
         }
 
@@ -237,7 +239,8 @@ public sealed class LibraryCsvService
             CommitteeRating = row.Rating(Column.CommitteeRating),
             PopularityScore = row.Rating(Column.Popularity),
             SocialScore = row.Rating(Column.Social),
-            ThumbnailPath = row.Text(Column.Thumbnail, MaxPathLength)
+            ThumbnailPath = row.Text(Column.Thumbnail, MaxPathLength),
+            Label = row.Text(Column.RecordLabel)
         };
 
         var originPlace = row.Text(Column.OriginPlace);
@@ -552,6 +555,7 @@ public sealed class LibraryCsvService
         Add(Column.Popularity, "Popularité", "Popularite", "Popularity");
         Add(Column.Social, "Réseaux", "Reseaux", "Réseaux sociaux", "Social");
         Add(Column.Thumbnail, "Vignette", "Miniature", "Thumbnail", "Image");
+        Add(Column.RecordLabel, "Label", "Maison de disques", "Producteur", "Record label");
         return aliases;
     }
 

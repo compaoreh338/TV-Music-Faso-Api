@@ -132,6 +132,14 @@ public sealed class PostgresClipRepository : IClipRepository
         command.Parameters.AddWithValue("last_broadcast_failure_note", clip.LastBroadcastFailureNote);
         command.Parameters.AddWithValue("validation_status", (int)clip.ValidationStatus);
         command.Parameters.AddWithValue("validation_note", clip.ValidationNote);
+        command.Parameters.AddWithValue("label", clip.Label ?? string.Empty);
+        command.Parameters.AddWithValue("signed_file_path", clip.SignedFilePath ?? string.Empty);
+        command.Parameters.AddWithValue("signature_status", (int)clip.SignatureStatus);
+        command.Parameters.AddWithValue("signature_key", clip.SignatureKey ?? string.Empty);
+        command.Parameters.Add(new NpgsqlParameter("signed_at", NpgsqlTypes.NpgsqlDbType.TimestampTz)
+        {
+            Value = clip.SignedAt is { } signedAt ? signedAt.ToUniversalTime() : DBNull.Value
+        });
         command.ExecuteNonQuery();
     }
 
@@ -170,8 +178,41 @@ public sealed class PostgresClipRepository : IClipRepository
             BroadcastFailureCount = reader.GetInt32(reader.GetOrdinal("broadcast_failure_count")),
             LastBroadcastFailureNote = reader.GetString(reader.GetOrdinal("last_broadcast_failure_note")),
             ValidationStatus = ReadValidation(reader),
-            ValidationNote = ReadOptionalString(reader, "validation_note")
+            ValidationNote = ReadOptionalString(reader, "validation_note"),
+            Label = ReadOptionalString(reader, "label"),
+            SignedFilePath = ReadOptionalString(reader, "signed_file_path"),
+            SignatureStatus = ReadSignatureStatus(reader),
+            SignatureKey = ReadOptionalString(reader, "signature_key"),
+            SignedAt = ReadOptionalTimestamp(reader, "signed_at")
         };
+
+    private static ClipSignatureStatus ReadSignatureStatus(NpgsqlDataReader reader)
+    {
+        try
+        {
+            var value = reader.GetInt32(reader.GetOrdinal("signature_status"));
+            return Enum.IsDefined(typeof(ClipSignatureStatus), value)
+                ? (ClipSignatureStatus)value
+                : ClipSignatureStatus.None;
+        }
+        catch (IndexOutOfRangeException)
+        {
+            return ClipSignatureStatus.None;
+        }
+    }
+
+    private static DateTime? ReadOptionalTimestamp(NpgsqlDataReader reader, string column)
+    {
+        try
+        {
+            var ordinal = reader.GetOrdinal(column);
+            return reader.IsDBNull(ordinal) ? null : reader.GetFieldValue<DateTime>(ordinal).ToLocalTime();
+        }
+        catch (IndexOutOfRangeException)
+        {
+            return null;
+        }
+    }
 
     private static ClipValidationStatus ReadValidation(NpgsqlDataReader reader)
     {
@@ -205,13 +246,15 @@ public sealed class PostgresClipRepository : IClipRepository
             duration_ticks, genre, language, language_name, theme, audience, impact_score, is_premium,
             is_morally_compliant, file_path, lifetime_play_count, committee_rating, popularity_score,
             social_score, thumbnail_path, broadcast_failure_count, last_broadcast_failure_note,
-            validation_status, validation_note)
+            validation_status, validation_note, label, signed_file_path, signature_status, signature_key,
+            signed_at)
         VALUES (
             @id, @title, @artist, @year, @origin_place, @filming_location, @is_burkinabe, @quality, @format,
             @duration_ticks, @genre, @language, @language_name, @theme, @audience, @impact_score, @is_premium,
             @is_morally_compliant, @file_path, @lifetime_play_count, @committee_rating, @popularity_score,
             @social_score, @thumbnail_path, @broadcast_failure_count, @last_broadcast_failure_note,
-            @validation_status, @validation_note);
+            @validation_status, @validation_note, @label, @signed_file_path, @signature_status, @signature_key,
+            @signed_at);
         """;
 
     private const string UpdateSql =
@@ -227,7 +270,9 @@ public sealed class PostgresClipRepository : IClipRepository
             popularity_score = @popularity_score, social_score = @social_score,
             thumbnail_path = @thumbnail_path, broadcast_failure_count = @broadcast_failure_count,
             last_broadcast_failure_note = @last_broadcast_failure_note,
-            validation_status = @validation_status, validation_note = @validation_note
+            validation_status = @validation_status, validation_note = @validation_note,
+            label = @label, signed_file_path = @signed_file_path, signature_status = @signature_status,
+            signature_key = @signature_key, signed_at = @signed_at
         WHERE id = @id;
         """;
 }

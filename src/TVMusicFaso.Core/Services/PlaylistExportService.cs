@@ -209,7 +209,7 @@ public sealed class PlaylistExportService
     }
 
     private string FileOrFallback(Clip clip) =>
-        _paths.Map(clip.FilePath, $"{clip.Artist} - {clip.Title}.mp4");
+        _paths.Map(clip.BroadcastFilePath, $"{clip.Artist} - {clip.Title}.mp4");
 
     private static string Quote(string value) => $"\"{value.Replace("\"", "\"\"")}\"";
 

@@ -79,11 +79,55 @@ public sealed class Clip
 
     public string ValidationNote { get; set; } = string.Empty;
 
+    /// <summary>Maison de disques ou producteur, repris dans le bandeau de signature.</summary>
+    public string Label { get; set; } = string.Empty;
+
+    /// <summary>Version signée (16:9) : dans « Signés » le temps de la vérification, puis le fichier du clip lui-même.</summary>
+    public string SignedFilePath { get; set; } = string.Empty;
+
+    public ClipSignatureStatus SignatureStatus { get; set; } = ClipSignatureStatus.None;
+
+    /// <summary>Modèle, révision et textes utilisés pour la version signée : sert à repérer les versions périmées.</summary>
+    public string SignatureKey { get; set; } = string.Empty;
+
+    public DateTime? SignedAt { get; set; }
+
+    public bool HasSignedVersion => SignatureStatus != ClipSignatureStatus.None
+        && !string.IsNullOrWhiteSpace(SignedFilePath);
+
+    /// <summary>Fichier envoyé à l'antenne : la version signée vérifiée, sinon l'original.</summary>
+    public string BroadcastFilePath => SignatureStatus == ClipSignatureStatus.Approved
+        && !string.IsNullOrWhiteSpace(SignedFilePath)
+            ? SignedFilePath
+            : FilePath;
+
+    public string SignatureLabel => SignatureStatus.ToDisplayName();
+
     public bool IsValidated => ValidationStatus == ClipValidationStatus.Validated;
 
     public bool IsPendingValidation => ValidationStatus == ClipValidationStatus.Pending;
 
-    public bool IsReadyForProgramming => IsMorallyCompliant && IsValidated;
+    /// <summary>Version signée vérifiée et validée : seule condition de signature pour passer à l'antenne.</summary>
+    public bool IsSigned => SignatureStatus == ClipSignatureStatus.Approved
+        && !string.IsNullOrWhiteSpace(SignedFilePath);
+
+    /// <summary>Programmable : conforme, validé et signé (la validation de la signature valide aussi le clip).</summary>
+    public bool IsReadyForProgramming => IsMorallyCompliant && IsValidated && IsSigned;
+
+    /// <summary>Raison pour laquelle le clip n'entre pas dans les grilles, ou vide s'il est programmable.</summary>
+    public string ProgrammingBlocker => !IsMorallyCompliant
+        ? "Non conforme"
+        : ValidationStatus == ClipValidationStatus.Rejected
+            ? "Refusé"
+            : !IsSigned
+                ? "À signer"
+                : !IsValidated
+                    ? "À valider"
+                    : string.Empty;
+
+    public string ProgrammingLabel => ProgrammingBlocker.Length == 0
+        ? "Programmable"
+        : $"Non programmable : {ProgrammingBlocker.ToLowerInvariant()}";
 
     public string ValidationLabel => ValidationStatus.ToDisplayName();
 
@@ -149,6 +193,47 @@ public sealed class Clip
             : note.Trim();
     }
 
+    /// <summary>Enregistre une nouvelle version signée, à prévisualiser avant diffusion.</summary>
+    public void AttachSignature(string signedFilePath, string signatureKey, DateTime renderedAt, bool keepApproval)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(signedFilePath);
+        SignedFilePath = signedFilePath;
+        SignatureKey = signatureKey ?? string.Empty;
+        SignedAt = renderedAt;
+        SignatureStatus = keepApproval && SignatureStatus == ClipSignatureStatus.Approved
+            ? ClipSignatureStatus.Approved
+            : ClipSignatureStatus.ToReview;
+    }
+
+    /// <summary>Valide la version signée ; un clip encore « à valider » devient validé du même coup.</summary>
+    public void ApproveSignature()
+    {
+        if (string.IsNullOrWhiteSpace(SignedFilePath))
+        {
+            throw new InvalidOperationException("Aucune version signée à valider pour ce clip.");
+        }
+
+        if (ValidationStatus == ClipValidationStatus.Rejected)
+        {
+            throw new InvalidOperationException("Clip refusé : il doit être corrigé et revalidé avant d'être signé.");
+        }
+
+        SignatureStatus = ClipSignatureStatus.Approved;
+        if (ValidationStatus == ClipValidationStatus.Pending)
+        {
+            Approve();
+        }
+    }
+
+    /// <summary>Retire la signature : l'antenne revient au fichier d'origine.</summary>
+    public void WithdrawSignature()
+    {
+        SignatureStatus = ClipSignatureStatus.None;
+        SignedFilePath = string.Empty;
+        SignatureKey = string.Empty;
+        SignedAt = null;
+    }
+
     public Clip Clone()
     {
         var copy = new Clip { Id = Id };
@@ -185,5 +270,10 @@ public sealed class Clip
         LastBroadcastFailureNote = source.LastBroadcastFailureNote;
         ValidationStatus = source.ValidationStatus;
         ValidationNote = source.ValidationNote;
+        Label = source.Label;
+        SignedFilePath = source.SignedFilePath;
+        SignatureStatus = source.SignatureStatus;
+        SignatureKey = source.SignatureKey;
+        SignedAt = source.SignedAt;
     }
 }

@@ -8,6 +8,7 @@ builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddSingleton<ApiComposition>();
+builder.Services.AddHostedService<IngestHostedService>();
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("Spa", policy =>
@@ -400,19 +401,48 @@ app.MapPut("/api/clips/{id:guid}", (Guid id, ClipWriteRequest body, HttpContext 
     if (existing is null) return Results.NotFound();
     var clip = body.ToClip(id);
     if (RejectArchivedGenre(clip, existing) is { } archivedGenre) return archivedGenre;
+    body.KeepMissingFrom(clip, existing);
+    if (!body.TryApplySignature(clip))
+    {
+        return Results.BadRequest(new { message = "Signature invalide : statut inconnu ou fichier signé manquant." });
+    }
+
+    var signatureChanged = clip.SignatureStatus != existing.SignatureStatus
+        || !string.Equals(clip.SignedFilePath, existing.SignedFilePath, StringComparison.Ordinal)
+        || !string.Equals(clip.SignatureKey, existing.SignatureKey, StringComparison.Ordinal);
+    if (signatureChanged && !session.Policy.CanValidateClips) return Denied();
+    if (signatureChanged && clip.SignatureStatus != ClipSignatureStatus.None
+        && existing.ValidationStatus == ClipValidationStatus.Rejected)
+    {
+        return Results.BadRequest(new { message = "Clip refusé : il doit être corrigé et revalidé avant d'être signé." });
+    }
+
     clip.LifetimePlayCount = existing.LifetimePlayCount;
     // Le statut ne vient jamais du client : la validation se fait à la création,
     // une modification le garde, sauf un clip refusé qui repart « à valider ».
+    // Valider la signature d'un clip « à valider » le valide (droit déjà vérifié ci-dessus).
     clip.ValidationStatus = existing.ValidationStatus;
     clip.ValidationNote = existing.ValidationNote;
     var resubmitted = existing.ValidationStatus == ClipValidationStatus.Rejected;
+    var validatedBySignature = signatureChanged
+        && clip.SignatureStatus == ClipSignatureStatus.Approved
+        && existing.ValidationStatus == ClipValidationStatus.Pending;
     if (resubmitted)
     {
         clip.SubmitForValidation();
     }
+    else if (validatedBySignature)
+    {
+        clip.Approve();
+    }
 
     composition.Clips.Update(clip);
     composition.Audit.Write(session, "Édition clip", resubmitted ? $"{clip.Title} (corrigé, à valider)" : clip.Title);
+    if (signatureChanged)
+    {
+        composition.Audit.Write(session, "Signature clip",
+            $"{clip.Artist} — {clip.Title} : {clip.SignatureLabel}{(validatedBySignature ? " (clip validé avec sa signature)" : string.Empty)}");
+    }
     return Results.Ok(ClipDto(clip));
 });
 
@@ -490,7 +520,7 @@ app.MapPost("/api/schedules/generate", (GenerateRequest body, HttpContext http, 
                 YearTo: body.YearFrom is { } from2 && body.YearTo is { } to2 ? Math.Max(from2, to2) : body.YearTo);
         if (!library.Any(clip => clip.IsReadyForProgramming && theme.Matches(clip)))
         {
-            return Results.BadRequest(new { message = $"Aucun clip validé ne correspond à « {theme.Label} »." });
+            return Results.BadRequest(new { message = $"Aucun clip validé et signé ne correspond à « {theme.Label} »." });
         }
     }
 
@@ -814,6 +844,8 @@ app.MapPut("/api/users/{id:guid}/password", (Guid id, UserPasswordRequest body, 
     return Results.Ok(new { message = result.Message });
 });
 
+app.MapIngest();
+
 app.MapFallback("/api/{**rest}", () =>
     Results.Json(new { message = "Route API inconnue." }, statusCode: 404));
 app.Run();
@@ -940,7 +972,17 @@ static object ClipDto(Clip clip) => new
     validationStatus = clip.ValidationStatus.ToString(),
     validationLabel = clip.ValidationLabel,
     validationNote = clip.ValidationNote,
-    isValidated = clip.IsValidated
+    isValidated = clip.IsValidated,
+    thumbnailPath = clip.ThumbnailPath,
+    lifetimePlayCount = clip.LifetimePlayCount,
+    broadcastFailureCount = clip.BroadcastFailureCount,
+    lastBroadcastFailureNote = clip.LastBroadcastFailureNote,
+    label = clip.Label,
+    signedFilePath = clip.SignedFilePath,
+    signatureStatus = clip.SignatureStatus.ToString(),
+    signatureLabel = clip.SignatureLabel,
+    signatureKey = clip.SignatureKey,
+    signedAt = clip.SignedAt is { } signedAt ? new DateTimeOffset(signedAt.ToUniversalTime()) : (DateTimeOffset?)null
 };
 
 static object ScheduleDto(DaySchedule? schedule, DateOnly date) => new
@@ -1043,8 +1085,58 @@ public sealed record ClipWriteRequest(
     decimal? SocialScore,
     bool? IsPremium,
     bool? IsMorallyCompliant,
-    string? FilePath)
+    string? FilePath,
+    string? ThumbnailPath = null,
+    int? BroadcastFailureCount = null,
+    string? LastBroadcastFailureNote = null,
+    string? Label = null,
+    string? SignedFilePath = null,
+    string? SignatureStatus = null,
+    string? SignatureKey = null,
+    DateTimeOffset? SignedAt = null)
 {
+    /// <summary>
+    /// Reprend les champs absents de la requête depuis la fiche enregistrée :
+    /// une app plus ancienne qui ne les envoie pas ne les efface pas.
+    /// </summary>
+    public void KeepMissingFrom(Clip clip, Clip existing)
+    {
+        clip.ThumbnailPath = ThumbnailPath ?? existing.ThumbnailPath;
+        clip.BroadcastFailureCount = BroadcastFailureCount is { } failures
+            ? Math.Max(0, failures)
+            : existing.BroadcastFailureCount;
+        clip.LastBroadcastFailureNote = LastBroadcastFailureNote ?? existing.LastBroadcastFailureNote;
+        clip.Label = Label?.Trim() ?? existing.Label;
+        if (SignatureStatus is null)
+        {
+            clip.SignatureStatus = existing.SignatureStatus;
+            clip.SignedFilePath = existing.SignedFilePath;
+            clip.SignatureKey = existing.SignatureKey;
+            clip.SignedAt = existing.SignedAt;
+        }
+    }
+
+    /// <summary>Champs de signature demandés ; <c>false</c> si le statut envoyé est inconnu.</summary>
+    public bool TryApplySignature(Clip clip)
+    {
+        if (SignatureStatus is null)
+        {
+            return true;
+        }
+
+        if (!Enum.TryParse<ClipSignatureStatus>(SignatureStatus, ignoreCase: true, out var status)
+            || !Enum.IsDefined(status))
+        {
+            return false;
+        }
+
+        clip.SignatureStatus = status;
+        clip.SignedFilePath = status == ClipSignatureStatus.None ? "" : SignedFilePath?.Trim() ?? "";
+        clip.SignatureKey = status == ClipSignatureStatus.None ? "" : SignatureKey ?? "";
+        clip.SignedAt = status == ClipSignatureStatus.None ? null : SignedAt?.LocalDateTime;
+        return status == ClipSignatureStatus.None || clip.SignedFilePath.Length > 0;
+    }
+
     public Clip ToClip(Guid? id = null)
     {
         var clip = new Clip
@@ -1077,7 +1169,11 @@ public sealed record ClipWriteRequest(
             SocialScore = SocialScore ?? 3,
             IsPremium = IsPremium ?? false,
             IsMorallyCompliant = IsMorallyCompliant ?? true,
-            FilePath = FilePath ?? ""
+            FilePath = FilePath ?? "",
+            ThumbnailPath = ThumbnailPath ?? "",
+            BroadcastFailureCount = Math.Max(0, BroadcastFailureCount ?? 0),
+            LastBroadcastFailureNote = LastBroadcastFailureNote ?? "",
+            Label = Label?.Trim() ?? ""
         };
         clip.RecalculateImpact();
         return clip;

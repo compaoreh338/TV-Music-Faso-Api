@@ -111,6 +111,11 @@ internal static class SqliteDatabase
         AddColumn(connection, "clips", "ValidationStatus", "INTEGER NOT NULL DEFAULT 1");
         AddColumn(connection, "clips", "ValidationNote", "TEXT NOT NULL DEFAULT ''");
         AddColumn(connection, "clips", "LanguageName", "TEXT NOT NULL DEFAULT ''");
+        AddColumn(connection, "clips", "Label", "TEXT NOT NULL DEFAULT ''");
+        AddColumn(connection, "clips", "SignedFilePath", "TEXT NOT NULL DEFAULT ''");
+        AddColumn(connection, "clips", "SignatureStatus", "INTEGER NOT NULL DEFAULT 0");
+        AddColumn(connection, "clips", "SignatureKey", "TEXT NOT NULL DEFAULT ''");
+        AddColumn(connection, "clips", "SignedAt", "TEXT NULL");
     }
 
     private static void AddColumn(SqliteConnection connection, string table, string column, string declaration)

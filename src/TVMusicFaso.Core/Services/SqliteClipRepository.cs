@@ -114,13 +114,15 @@ public sealed class SqliteClipRepository : IClipRepository
                   DurationTicks, Genre, Language, LanguageName, Theme, Audience, ImpactScore, IsPremium,
                   IsMorallyCompliant, FilePath, LifetimePlayCount, CommitteeRating, PopularityScore,
                   SocialScore, ThumbnailPath, BroadcastFailureCount, LastBroadcastFailureNote,
-                  ValidationStatus, ValidationNote)
+                  ValidationStatus, ValidationNote, Label, SignedFilePath, SignatureStatus, SignatureKey,
+                  SignedAt)
               VALUES (
                   $Id, $Title, $Artist, $Year, $OriginPlace, $FilmingLocation, $IsBurkinabe, $Quality, $Format,
                   $DurationTicks, $Genre, $Language, $LanguageName, $Theme, $Audience, $ImpactScore, $IsPremium,
                   $IsMorallyCompliant, $FilePath, $LifetimePlayCount, $CommitteeRating, $PopularityScore,
                   $SocialScore, $ThumbnailPath, $BroadcastFailureCount, $LastBroadcastFailureNote,
-                  $ValidationStatus, $ValidationNote);
+                  $ValidationStatus, $ValidationNote, $Label, $SignedFilePath, $SignatureStatus, $SignatureKey,
+                  $SignedAt);
               """
             : """
               UPDATE clips SET
@@ -134,7 +136,9 @@ public sealed class SqliteClipRepository : IClipRepository
                   PopularityScore = $PopularityScore, SocialScore = $SocialScore,
                   ThumbnailPath = $ThumbnailPath, BroadcastFailureCount = $BroadcastFailureCount,
                   LastBroadcastFailureNote = $LastBroadcastFailureNote,
-                  ValidationStatus = $ValidationStatus, ValidationNote = $ValidationNote
+                  ValidationStatus = $ValidationStatus, ValidationNote = $ValidationNote,
+                  Label = $Label, SignedFilePath = $SignedFilePath, SignatureStatus = $SignatureStatus,
+                  SignatureKey = $SignatureKey, SignedAt = $SignedAt
               WHERE Id = $Id;
               """;
         return command;
@@ -172,6 +176,13 @@ public sealed class SqliteClipRepository : IClipRepository
         command.Parameters.AddWithValue("$LastBroadcastFailureNote", clip.LastBroadcastFailureNote);
         command.Parameters.AddWithValue("$ValidationStatus", (int)clip.ValidationStatus);
         command.Parameters.AddWithValue("$ValidationNote", clip.ValidationNote);
+        command.Parameters.AddWithValue("$Label", clip.Label ?? string.Empty);
+        command.Parameters.AddWithValue("$SignedFilePath", clip.SignedFilePath ?? string.Empty);
+        command.Parameters.AddWithValue("$SignatureStatus", (int)clip.SignatureStatus);
+        command.Parameters.AddWithValue("$SignatureKey", clip.SignatureKey ?? string.Empty);
+        command.Parameters.AddWithValue("$SignedAt", clip.SignedAt is { } signedAt
+            ? signedAt.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture)
+            : DBNull.Value);
     }
 
     private static Clip ReadClip(SqliteDataReader reader) =>
@@ -204,8 +215,24 @@ public sealed class SqliteClipRepository : IClipRepository
             BroadcastFailureCount = ReadInt(reader, "BroadcastFailureCount"),
             LastBroadcastFailureNote = ReadString(reader, "LastBroadcastFailureNote"),
             ValidationStatus = (ClipValidationStatus)ReadInt(reader, "ValidationStatus", 1),
-            ValidationNote = ReadString(reader, "ValidationNote")
+            ValidationNote = ReadString(reader, "ValidationNote"),
+            Label = ReadString(reader, "Label"),
+            SignedFilePath = ReadString(reader, "SignedFilePath"),
+            SignatureStatus = ReadSignatureStatus(ReadInt(reader, "SignatureStatus")),
+            SignatureKey = ReadString(reader, "SignatureKey"),
+            SignedAt = ReadTimestamp(reader, "SignedAt")
         };
+
+    private static ClipSignatureStatus ReadSignatureStatus(int value) =>
+        Enum.IsDefined(typeof(ClipSignatureStatus), value) ? (ClipSignatureStatus)value : ClipSignatureStatus.None;
+
+    private static DateTime? ReadTimestamp(SqliteDataReader reader, string column)
+    {
+        var text = ReadString(reader, column);
+        return DateTime.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var value)
+            ? value.ToLocalTime()
+            : null;
+    }
 
     private static string ReadString(SqliteDataReader reader, string column)
     {

@@ -27,9 +27,16 @@ public sealed class ApiComposition
         var playoutRoot = configuration["Playout:PlayoutRoot"];
         Export = new PlaylistExportService(new PlayoutPathMapper(LibraryRoot, playoutRoot));
         Backup = new BackupService();
+        IngestStore = new PostgresIngestStore(connection);
+        Ingest = new IngestService(IngestStore, Clips, Audit, Languages);
     }
 
     public string? LibraryRoot { get; }
+
+    /// <summary>Sources suivies, clips arrivés, réglages et mémoire des corrections (M1 à M5).</summary>
+    public IIngestStore IngestStore { get; }
+
+    public IngestService Ingest { get; }
 
     public ILanguageCatalog Languages { get; }
 

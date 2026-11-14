@@ -70,6 +70,9 @@ public static class SeedData
             FilmingLocation = filming,
             Quality = score >= 4.5 ? VideoQuality.Uhd4K : VideoQuality.Hd,
             FilePath = $"/mediatheque/{artist}/{title}.mp4".ToLowerInvariant(),
-            ValidationStatus = ClipValidationStatus.Validated
+            ValidationStatus = ClipValidationStatus.Validated,
+            // Démo d'une médiathèque déjà traitée : clip signé (fichier signé à la place de l'original).
+            SignedFilePath = $"/mediatheque/{artist}/{title}.mp4".ToLowerInvariant(),
+            SignatureStatus = ClipSignatureStatus.Approved
         };
 }

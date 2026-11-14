@@ -99,6 +99,10 @@ public static class EnumDisplay
         ClipValidationStatus.Validated => "Validé",
         ClipValidationStatus.Rejected => "Refusé",
 
+        ClipSignatureStatus.None => "Non signé",
+        ClipSignatureStatus.ToReview => "Signé, à vérifier",
+        ClipSignatureStatus.Approved => "Signé",
+
         _ => value.ToString()
     };
 }
