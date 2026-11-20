@@ -16,6 +16,7 @@ public sealed class IngestHostedService : BackgroundService
     private readonly ApiComposition _composition;
     private readonly IConfiguration _configuration;
     private readonly ILogger<IngestHostedService> _logger;
+    private readonly LicenceGate _licence;
     private readonly YouTubeFeedReader _feeds = new();
     private readonly List<Task> _downloads = [];
     private Task? _checking;
@@ -23,11 +24,16 @@ public sealed class IngestHostedService : BackgroundService
     private string? _versionOf;
     private DateTimeOffset _versionReadAt = DateTimeOffset.MinValue;
 
-    public IngestHostedService(ApiComposition composition, IConfiguration configuration, ILogger<IngestHostedService> logger)
+    public IngestHostedService(
+        ApiComposition composition,
+        IConfiguration configuration,
+        ILogger<IngestHostedService> logger,
+        LicenceGate licence)
     {
         _composition = composition;
         _configuration = configuration;
         _logger = logger;
+        _licence = licence;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -56,7 +62,15 @@ public sealed class IngestHostedService : BackgroundService
         {
             try
             {
-                await CycleAsync(pipeline, stoppingToken);
+                if (_licence.Status.IsValid)
+                {
+                    await CycleAsync(pipeline, stoppingToken);
+                }
+                else
+                {
+                    // Serveur sans licence valide : aucune détection ni téléchargement.
+                    TryWriteError("Licence du serveur absente ou refusée : arrivée des clips en pause.");
+                }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {

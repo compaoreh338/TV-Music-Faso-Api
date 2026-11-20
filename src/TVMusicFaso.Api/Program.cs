@@ -10,6 +10,7 @@ builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddSingleton<ApiComposition>();
+builder.Services.AddSingleton<LicenceGate>();
 builder.Services.AddHostedService<IngestHostedService>();
 builder.Services.AddResponseCompression(options =>
 {
@@ -32,6 +33,21 @@ var app = builder.Build();
 var publicUrl = builder.Configuration["PublicUrl"] ?? "https://localhost:7245";
 HttpsTransportPolicy.EnsureSecure(publicUrl);
 
+// Licence du serveur : l'API démarre toujours, pour afficher l'empreinte et recevoir la licence ;
+// sans licence valide, elle ne sert que « /api/health » et « /api/licence ».
+var licenceGate = app.Services.GetRequiredService<LicenceGate>();
+if (licenceGate.Status.IsValid)
+{
+    app.Logger.LogInformation("Licence : {Summary}", licenceGate.Status.Message);
+}
+else
+{
+    app.Logger.LogWarning(
+        "Licence : {Message} Fichier attendu : {Path}",
+        licenceGate.Status.Message,
+        licenceGate.FilePath);
+}
+
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
@@ -46,6 +62,7 @@ app.UseWhen(
 app.UseCors("Spa");
 app.UseDefaultFiles();
 app.UseStaticFiles();
+app.UseLicence();
 app.Use(async (http, next) =>
 {
     if (http.Request.Path.StartsWithSegments("/api") && !http.Request.Path.StartsWithSegments("/api/health"))
@@ -57,13 +74,14 @@ app.Use(async (http, next) =>
     await next();
 });
 
-app.MapGet("/api/health", (ApiComposition composition) =>
+app.MapGet("/api/health", (ApiComposition composition, LicenceGate licence) =>
     Results.Ok(new
     {
         status = "ok",
         store = "PostgreSQL",
         https = true,
-        publicUrl
+        publicUrl,
+        licence = licence.Status.IsValid
     }));
 
 app.MapPost("/api/auth/login", (LoginRequest request, ApiComposition composition) =>
@@ -931,6 +949,7 @@ app.MapPut("/api/users/{id:guid}/password", (Guid id, UserPasswordRequest body, 
 });
 
 app.MapIngest();
+app.MapLicence();
 
 app.MapFallback("/api/{**rest}", () =>
     Results.Json(new { message = "Route API inconnue." }, statusCode: 404));

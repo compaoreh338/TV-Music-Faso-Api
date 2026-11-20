@@ -5,11 +5,15 @@ namespace TVMusicFaso.Api;
 
 public sealed class ApiComposition
 {
+    /// <summary>Chaîne de connexion à la base du serveur (configuration, sinon Postgres local par défaut).</summary>
+    public static string ConnectionString(IConfiguration configuration) =>
+        configuration.GetConnectionString("Postgres")
+        ?? configuration["ConnectionStrings:Postgres"]
+        ?? "Host=localhost;Port=5432;Database=tvmusicfaso;Username=tvmusic;Password=tvmusic";
+
     public ApiComposition(IConfiguration configuration)
     {
-        var connection = configuration.GetConnectionString("Postgres")
-            ?? configuration["ConnectionStrings:Postgres"]
-            ?? "Host=localhost;Port=5432;Database=tvmusicfaso;Username=tvmusic;Password=tvmusic";
+        var connection = ConnectionString(configuration);
         PostgresDatabase.EnsureReady(connection);
         Clips = new PostgresClipRepository(connection);
         Auth = new PostgresAuthService(connection);
