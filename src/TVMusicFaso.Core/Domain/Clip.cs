@@ -129,6 +129,33 @@ public sealed class Clip
     public bool IsSigned => SignatureStatus == ClipSignatureStatus.Approved
         && !string.IsNullOrWhiteSpace(SignedFilePath);
 
+    /// <summary>
+    /// Marque interne d'un clip déjà à l'antenne avant le suivi de signature.
+    /// Le fichier en place reste la version diffusée : aucun nouveau rendu n'est demandé.
+    /// </summary>
+    public const string LegacyOnAirSignatureKey = "antenne-deja-signee";
+
+    /// <summary>
+    /// Clip validé de la médiathèque, sans fiche de signature : son fichier actuel est déjà celui de l'antenne.
+    /// Ne concerne ni une arrivée, ni un clip dont la signature a été posée ou retirée.
+    /// </summary>
+    public void RecognizeExistingOnAirFile()
+    {
+        if (!IsValidated
+            || IsFromArrivals
+            || SignatureStatus != ClipSignatureStatus.None
+            || !string.IsNullOrWhiteSpace(SignedFilePath)
+            || string.IsNullOrWhiteSpace(FilePath)
+            || Review.History.Any(entry => entry.Kind is ClipEventKind.Signed or ClipEventKind.SignatureWithdrawn))
+        {
+            return;
+        }
+
+        SignatureStatus = ClipSignatureStatus.Approved;
+        SignedFilePath = FilePath;
+        SignatureKey = LegacyOnAirSignatureKey;
+    }
+
     /// <summary>Programmable : non retiré, conforme, validé et signé (la validation de la signature valide aussi le clip).</summary>
     public bool IsReadyForProgramming => !IsWithdrawn && IsMorallyCompliant && IsValidated && IsSigned;
 

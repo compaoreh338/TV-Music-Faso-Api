@@ -169,7 +169,7 @@ public static class IngestEndpoints
             }));
     }
 
-    /// <summary>Enregistre le flux reçu sous un nom choisi par le serveur dans « _Arrivees/Depots ».</summary>
+    /// <summary>Enregistre le flux reçu sous un nom choisi par le serveur dans « CLIPS BON NEW/Depots ».</summary>
     private static async Task<string> StoreDepositAsync(HttpContext http, ApiComposition composition, string? fileName)
     {
         var extension = Path.GetExtension(fileName ?? string.Empty).ToLowerInvariant();

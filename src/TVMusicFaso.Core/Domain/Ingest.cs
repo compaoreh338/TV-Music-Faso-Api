@@ -462,8 +462,8 @@ public sealed class IngestSettings
     /// <summary>Télécharge tout de suite chaque nouveau clip détecté (sauf doublon probable).</summary>
     public bool AutoDownload { get; set; } = true;
 
-    /// <summary>Dossier de travail, relatif à la médiathèque du serveur.</summary>
-    public string IngestFolderName { get; set; } = "_Arrivees";
+    /// <summary>Dossier de travail, relatif à la médiathèque du serveur. Même dossier que les clips déjà en antenne.</summary>
+    public string IngestFolderName { get; set; } = "CLIPS BON NEW";
 
     /// <summary>yt-dlp sur le serveur ; vide = recherche automatique.</summary>
     public string YtDlpPath { get; set; } = string.Empty;
@@ -516,7 +516,7 @@ public sealed class IngestSettings
             || IngestFolderName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0
             || IngestFolderName is "." or "..")
         {
-            errors.Add("Le dossier des arrivées est un simple nom de dossier dans la médiathèque (ex. _Arrivees).");
+            errors.Add("Le dossier des arrivées est un simple nom de dossier dans la médiathèque (ex. CLIPS BON NEW).");
         }
 
         if (MaxConcurrentDownloads is < 1 or > 8)

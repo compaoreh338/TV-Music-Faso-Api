@@ -9,5 +9,5 @@ public static class LicenceKeys
     /// (outil « tvmf-licence creer-cles »). La changer invalide toutes les licences déjà émises.
     /// </summary>
     public const string Production =
-        "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE+wzTjgi3NI8vSX2k2p6kGhPVmoKXAaypISzcpnmc+EE2TaEueRbQyDtedX2MQ+EF10koVrfJWVxmKimzSBT1KQ==";
+        "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEds4xlY8ljoM4NtjNf902n/bHClV5pWB/7114Egs0ydJN4e6FExP7vfMxDxwGlvBczShN9KSAzOZU/J/csPyYkA==";
 }

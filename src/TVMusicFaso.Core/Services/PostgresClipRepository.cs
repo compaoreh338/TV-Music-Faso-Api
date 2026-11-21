@@ -42,7 +42,10 @@ public sealed class PostgresClipRepository : IClipRepository
         using var connection = PostgresDatabase.Open(_connectionString);
         using var command = new NpgsqlCommand("DELETE FROM clips WHERE id = @id;", connection);
         command.Parameters.AddWithValue("id", id);
-        command.ExecuteNonQuery();
+        if (command.ExecuteNonQuery() == 0)
+        {
+            throw new InvalidOperationException("Ce clip n'est plus dans la médiathèque.");
+        }
     }
 
     public void SetValidation(Guid id, ClipValidationStatus status, string? note = null) =>
@@ -176,8 +179,9 @@ public sealed class PostgresClipRepository : IClipRepository
             ? connectionString
             : connectionString.TrimEnd(';') + ";Timeout=2;Command Timeout=2";
 
-    private static Clip Read(NpgsqlDataReader reader) =>
-        new()
+    private static Clip Read(NpgsqlDataReader reader)
+    {
+        var clip = new Clip
         {
             Id = reader.GetGuid(reader.GetOrdinal("id")),
             Title = reader.GetString(reader.GetOrdinal("title")),
@@ -214,6 +218,9 @@ public sealed class PostgresClipRepository : IClipRepository
             SignedAt = ReadOptionalTimestamp(reader, "signed_at"),
             Review = ClipReview.FromJson(ReadOptionalString(reader, "review_json"))
         };
+        clip.RecognizeExistingOnAirFile();
+        return clip;
+    }
 
     private static ClipSignatureStatus ReadSignatureStatus(NpgsqlDataReader reader)
     {
