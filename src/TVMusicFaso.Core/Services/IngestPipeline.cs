@@ -52,10 +52,130 @@ public sealed partial class IngestPipeline
         _store.ResetStage(IngestStage.Downloading, IngestStage.Queued)
         + _store.ResetStage(IngestStage.Checking, IngestStage.Downloaded);
 
+    /// <summary>Début de la note posée sur une vidéo écartée parce que publiée avant la période de recul.</summary>
+    public const string TooOldNotePrefix = "Publié avant le début du suivi";
+
+    /// <summary>
+    /// Remet dans le parcours les vidéos écartées seulement pour leur date, si elles entrent dans le recul
+    /// actuel (recul allongé après coup). Les clips ignorés à la main ou pour une autre raison ne bougent pas.
+    /// </summary>
+    public int ReviveWithinLookback(IngestSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        var limit = _clock().AddDays(-settings.InitialLookbackDays);
+        var candidates = _store.GetItems([IngestStage.Ignored])
+            .Where(item => item.StageNote.StartsWith(TooOldNotePrefix, StringComparison.Ordinal)
+                && item.PublishedAt is { } published && published >= limit)
+            .ToList();
+        if (candidates.Count == 0)
+        {
+            return 0;
+        }
+
+        var library = _clips.GetAll();
+        var revived = 0;
+        foreach (var item in candidates)
+        {
+            var source = item.SourceId is { } sourceId ? _store.GetSource(sourceId) : null;
+            if (source is null)
+            {
+                continue;
+            }
+
+            item.StageNote = string.Empty;
+            Admit(item, source, settings, library);
+            item.UpdatedAt = _clock();
+            item.UpdatedBy = "Serveur";
+            _store.UpdateItem(item);
+            revived++;
+        }
+
+        if (revived > 0)
+        {
+            _log($"{revived} vidéo(s) de moins de {settings.InitialLookbackDays} jours remise(s) dans les arrivées.");
+        }
+
+        return revived;
+    }
+
+    /// <summary>
+    /// Efface les fichiers des clips supprimés des arrivées. Seuls les fichiers rangés dans le dossier des
+    /// arrivées (originaux, diffusion, dépôts) sont touchés ; tout autre chemin est laissé en place.
+    /// </summary>
+    public int PurgeRemovedFiles(IngestSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        var root = IngestRoot(settings);
+        if (root is null)
+        {
+            return 0;
+        }
+
+        var allowed = new[] { OriginalsFolder, BroadcastFolder, DepositsFolder }
+            .Select(folder => Path.GetFullPath(Path.Combine(root, folder)).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar)
+            .ToArray();
+        var purged = 0;
+        foreach (var item in _store.GetItems([IngestStage.Removed], 100)
+                     .Where(item => item.OriginalFilePath.Length > 0 || item.BroadcastFilePath.Length > 0))
+        {
+            item.OriginalFilePath = DeleteInside(item.OriginalFilePath, allowed);
+            item.BroadcastFilePath = DeleteInside(item.BroadcastFilePath, allowed);
+            item.UpdatedAt = _clock();
+            item.UpdatedBy = "Serveur";
+            _store.UpdateItem(item);
+            purged++;
+        }
+
+        return purged;
+    }
+
+    /// <summary>Efface le fichier s'il est rangé dans un des dossiers permis ; renvoie le chemin à garder (vide une fois effacé).</summary>
+    private string DeleteInside(string path, IReadOnlyList<string> allowedFolders)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return string.Empty;
+        }
+
+        string full;
+        try
+        {
+            full = Path.GetFullPath(path);
+        }
+        catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return string.Empty;
+        }
+
+        if (!allowedFolders.Any(folder => full.StartsWith(folder, StringComparison.OrdinalIgnoreCase)))
+        {
+            _log($"Fichier d'un clip supprimé laissé en place (hors du dossier des arrivées) : {full}");
+            return string.Empty;
+        }
+
+        try
+        {
+            if (File.Exists(full))
+            {
+                File.Delete(full);
+                _log($"Fichier d'un clip supprimé effacé : {full}");
+            }
+
+            return string.Empty;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // Fichier ouvert ailleurs : nouvel essai au cycle suivant.
+            _log($"Fichier d'un clip supprimé non effacé ({exception.Message}) : {full}");
+            return path;
+        }
+    }
+
     /// <summary>Interroge les sources dont le passage est dû ; renvoie le nombre de nouveaux clips.</summary>
     public async Task<int> DetectDueAsync(IngestSettings settings, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(settings);
+        var revived = ReviveWithinLookback(settings);
         var now = _clock();
         var due = _store.GetSources()
             .Where(source => source.IsActive && source.IsAutomatic && (source.NextCheckAt ?? DateTimeOffset.MinValue) <= now)
@@ -65,11 +185,11 @@ public sealed partial class IngestPipeline
             .ToList();
         if (due.Count == 0)
         {
-            return 0;
+            return revived;
         }
 
         var library = _clips.GetAll();
-        var total = 0;
+        var total = revived;
         foreach (var source in due)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -221,6 +341,20 @@ public sealed partial class IngestPipeline
         return $"{(safe.Length == 0 ? "Clip" : safe)} [{item.Id.ToString("N")[..8]}].mp4";
     }
 
+    /// <summary>Pré-remplit la fiche, repère un doublon probable, puis met en file (ou laisse au choix du programmateur).</summary>
+    private void Admit(IngestItem item, MonitoredSource source, IngestSettings settings, IReadOnlyList<Clip> library)
+    {
+        item.Suggestion = _suggestions.Build(item, source, library);
+        var duplicate = ClipSuggestionBuilder.FindProbableDuplicate(item.Suggestion, library);
+        if (duplicate is not null)
+        {
+            item.DuplicateOfClipId = duplicate.Id;
+            item.DuplicateNote = $"Doublon probable de « {duplicate.Artist} – {duplicate.Title} » déjà en médiathèque.";
+        }
+
+        item.Stage = settings.AutoDownload && duplicate is null ? IngestStage.Queued : IngestStage.Detected;
+    }
+
     private async Task<int> DetectAsync(MonitoredSource source, IngestSettings settings, IReadOnlyList<Clip> library, CancellationToken cancellationToken)
     {
         var now = _clock();
@@ -261,19 +395,11 @@ public sealed partial class IngestPipeline
                 if (tooOld)
                 {
                     item.Stage = IngestStage.Ignored;
-                    item.StageNote = $"Publié avant le début du suivi (plus de {settings.InitialLookbackDays} jours).";
+                    item.StageNote = $"{TooOldNotePrefix} (plus de {settings.InitialLookbackDays} jours).";
                 }
                 else
                 {
-                    item.Suggestion = _suggestions.Build(item, source, library);
-                    var duplicate = ClipSuggestionBuilder.FindProbableDuplicate(item.Suggestion, library);
-                    if (duplicate is not null)
-                    {
-                        item.DuplicateOfClipId = duplicate.Id;
-                        item.DuplicateNote = $"Doublon probable de « {duplicate.Artist} – {duplicate.Title} » déjà en médiathèque.";
-                    }
-
-                    item.Stage = settings.AutoDownload && duplicate is null ? IngestStage.Queued : IngestStage.Detected;
+                    Admit(item, source, settings, library);
                     added++;
                 }
 

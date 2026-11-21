@@ -24,8 +24,12 @@ public static class IngestStages
     public static readonly IReadOnlyList<IngestStage> NeedsAction =
         [IngestStage.TechnicalRejected, IngestStage.FileRequested];
 
-    /// <summary>Étapes d'un filtre ; null = toutes.</summary>
-    public static IReadOnlyCollection<IngestStage>? For(IngestFilter filter) => filter switch
+    /// <summary>Toutes les étapes visibles : les clips supprimés n'apparaissent dans aucun filtre.</summary>
+    public static readonly IReadOnlyList<IngestStage> Visible =
+        Enum.GetValues<IngestStage>().Where(stage => stage != IngestStage.Removed).ToArray();
+
+    /// <summary>Étapes d'un filtre (jamais les clips supprimés).</summary>
+    public static IReadOnlyCollection<IngestStage> For(IngestFilter filter) => filter switch
     {
         IngestFilter.ToHandle => [IngestStage.Detected, IngestStage.Ready, .. NeedsAction],
         IngestFilter.New => [IngestStage.Detected],
@@ -34,7 +38,7 @@ public static class IngestStages
         IngestFilter.NeedsAction => NeedsAction.ToArray(),
         IngestFilter.Sent => [IngestStage.SentToValidation],
         IngestFilter.Ignored => [IngestStage.Ignored],
-        _ => null
+        _ => Visible.ToArray()
     };
 
     public static string FilterLabel(IngestFilter filter) => filter switch
@@ -61,6 +65,7 @@ public static class IngestStages
         IngestStage.FileRequested => "Fichier à demander",
         IngestStage.Ignored => "Ignoré",
         IngestStage.SentToValidation => "Envoyé à la signature",
+        IngestStage.Removed => "Supprimé",
         _ => stage.ToString()
     };
 
@@ -99,6 +104,11 @@ public static class IngestStages
         int fresh = 0, running = 0, ready = 0, blocked = 0, sent = 0, total = 0;
         foreach (var item in items)
         {
+            if (item.Stage == IngestStage.Removed)
+            {
+                continue;
+            }
+
             total++;
             switch (item.Stage)
             {

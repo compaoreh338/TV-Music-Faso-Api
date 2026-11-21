@@ -228,6 +228,7 @@ public sealed class IngestService
         RequireSubmit(actor);
         var item = Item(id);
         RequireNotBusy(item);
+        RequireNotRemoved(item);
         if (item.Stage == IngestStage.SentToValidation)
         {
             throw new InvalidOperationException("Clip déjà envoyé à la signature : traitez-le depuis l'écran Signature.");
@@ -236,6 +237,31 @@ public sealed class IngestService
         item.Stage = IngestStage.Ignored;
         item.StageNote = string.IsNullOrWhiteSpace(reason) ? "Ignoré par le programmateur." : reason.Trim();
         return Save(actor, item, "Clip arrivé ignoré");
+    }
+
+    /// <summary>
+    /// Retire le clip des arrivées. Il reste connu (le serveur ne le redétecte pas) et ses fichiers
+    /// téléchargés sont effacés par le serveur au cycle suivant.
+    /// </summary>
+    public IngestItem Remove(UserSession actor, Guid id)
+    {
+        RequireSubmit(actor);
+        var item = Item(id);
+        RequireNotBusy(item);
+        if (item.Stage == IngestStage.SentToValidation)
+        {
+            throw new InvalidOperationException("Clip déjà envoyé à la signature : supprimez sa fiche dans la médiathèque.");
+        }
+
+        if (item.Stage == IngestStage.Removed)
+        {
+            return item;
+        }
+
+        item.Stage = IngestStage.Removed;
+        item.StageNote = $"Supprimé par {actor.User.FullName}.";
+        item.NextAttemptAt = null;
+        return Save(actor, item, "Clip arrivé supprimé");
     }
 
     public IngestItem Restore(UserSession actor, Guid id)
@@ -293,6 +319,7 @@ public sealed class IngestService
         RequireDepositPath(storedPath);
         var item = Item(id);
         RequireNotBusy(item);
+        RequireNotRemoved(item);
         if (item.Stage == IngestStage.SentToValidation)
         {
             throw new InvalidOperationException("Clip déjà envoyé à la signature.");
@@ -576,6 +603,14 @@ public sealed class IngestService
         if (item.Stage is IngestStage.Downloading or IngestStage.Checking)
         {
             throw new InvalidOperationException($"Le serveur travaille sur ce clip ({IngestStages.Label(item.Stage)}) : réessayez dans un instant.");
+        }
+    }
+
+    private static void RequireNotRemoved(IngestItem item)
+    {
+        if (item.Stage == IngestStage.Removed)
+        {
+            throw new InvalidOperationException("Ce clip a été supprimé des arrivées.");
         }
     }
 

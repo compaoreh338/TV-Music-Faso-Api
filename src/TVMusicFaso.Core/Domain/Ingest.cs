@@ -34,7 +34,13 @@ public enum IngestStage
     /// <summary>Téléchargement impossible : le fichier original est à demander à l'artiste ou au label.</summary>
     FileRequested = 7,
     Ignored = 8,
-    SentToValidation = 9
+    SentToValidation = 9,
+
+    /// <summary>
+    /// Supprimé par le programmateur : n'apparaît plus dans aucune liste, mais reste connu pour que
+    /// le serveur ne le redétecte pas au passage suivant de la source. Ses fichiers sont effacés par le serveur.
+    /// </summary>
+    Removed = 10
 }
 
 /// <summary>Origine d'une information pré-remplie.</summary>
@@ -442,7 +448,11 @@ public sealed class IngestItem
     public bool IsBusy => Stage is IngestStage.Queued or IngestStage.Downloading or IngestStage.Downloaded or IngestStage.Checking;
 
     [JsonIgnore]
-    public bool IsClosed => Stage is IngestStage.Ignored or IngestStage.SentToValidation;
+    public bool IsClosed => Stage is IngestStage.Ignored or IngestStage.SentToValidation or IngestStage.Removed;
+
+    /// <summary>Peut être supprimé des arrivées : ni envoyé à la signature, ni en cours de traitement par le serveur.</summary>
+    [JsonIgnore]
+    public bool CanBeRemoved => Stage is not (IngestStage.SentToValidation or IngestStage.Removed or IngestStage.Downloading or IngestStage.Checking);
 
     public IngestItem Clone()
     {
@@ -476,7 +486,7 @@ public sealed class IngestSettings
     public int MaxDownloadAttempts { get; set; } = 3;
 
     /// <summary>Au premier passage d'une source, les vidéos plus anciennes sont ignorées.</summary>
-    public int InitialLookbackDays { get; set; } = 30;
+    public int InitialLookbackDays { get; set; } = 365;
 
     public int DefaultCheckIntervalMinutes { get; set; } = 360;
 

@@ -41,7 +41,8 @@ public sealed class ProgrammingEngine
             PreferUnderPlayed = _rules.PreferUnderPlayed,
             HitsReplayInEverySlot = _rules.HitsReplayInEverySlot,
             PreferBurkinabeUntilTarget = _rules.PreferBurkinabeUntilTarget,
-            SlotFillLimit = _rules.SlotFillLimit
+            SlotFillLimit = _rules.SlotFillLimit,
+            ArtistSpacing = _rules.ArtistSpacing
         };
         return new ProgrammingEngine(rules, slots, _random);
     }
@@ -115,6 +116,8 @@ public sealed class ProgrammingEngine
                 state.Remaining[clip.Id] = Math.Max(0, left - 1);
                 state.PlaysToday[clip.Id] = state.PlaysToday.GetValueOrDefault(clip.Id) + 1;
             }
+
+            state.CountArtist(clip, 1);
         }
 
         var schedule = new DaySchedule { Date = date };
@@ -181,6 +184,7 @@ public sealed class ProgrammingEngine
 
             state.Remaining[id] = Math.Max(0, MaxPlays(clip) - plays);
             state.PlaysToday[id] = Math.Max(0, plays);
+            state.CountArtist(clip, Math.Max(0, plays));
         }
 
         var schedule = new DaySchedule { Date = date };
@@ -248,7 +252,9 @@ public sealed class ProgrammingEngine
                 break;
             }
 
-            var last = playlist.Items.LastOrDefault()?.Clip;
+            // En début de tranche, le clip précédent à l'antenne est la fin de la tranche d'avant.
+            var last = playlist.Items.LastOrDefault()?.Clip
+                ?? schedule.Playlists.LastOrDefault()?.Items.LastOrDefault()?.Clip;
             var daySovereignty = sovereigntyOverride
                 ?? CombinedSovereignty(schedule, playlist);
             var requireBurkinabe = _rules.PreferBurkinabeUntilTarget
@@ -305,7 +311,11 @@ public sealed class ProgrammingEngine
                 : skippedHits.Count == 0
                     ? avoid
                     : new HashSet<Guid>(skippedHits.Concat(avoid));
-            return state.Pick(slotInfo, date.DayOfWeek, previous, thematic, _slots, _rules, burkinabeOnly, false, false, maxDuration, skip)
+            // D'abord un clip dont l'artiste n'est pas passé dans les derniers clips ; sinon on garde
+            // au moins un artiste différent du clip précédent (règle de diversité).
+            return state.Pick(slotInfo, date.DayOfWeek, previous, thematic, _slots, _rules, burkinabeOnly, false, false, maxDuration, skip, artistSpacing: true)
+                ?? state.Pick(slotInfo, date.DayOfWeek, previous, thematic, _slots, _rules, burkinabeOnly, false, false, maxDuration, skip)
+                ?? state.Pick(slotInfo, date.DayOfWeek, previous, thematic, _slots, _rules, burkinabeOnly, true, false, maxDuration, skip, artistSpacing: true)
                 ?? state.Pick(slotInfo, date.DayOfWeek, previous, thematic, _slots, _rules, burkinabeOnly, true, false, maxDuration, skip)
                 ?? state.Pick(slotInfo, date.DayOfWeek, previous, thematic, _slots, _rules, false, false, false, maxDuration, skip)
                 ?? state.Pick(slotInfo, date.DayOfWeek, previous, true, _slots, _rules, false, true, false, maxDuration, skip);
@@ -467,7 +477,8 @@ public sealed class ProgrammingEngine
             && string.Equals(clip.LanguageLabel, last.LanguageLabel, StringComparison.CurrentCultureIgnoreCase);
         return !sameLanguage
             && clip.Genre != last.Genre
-            && clip.Id != last.Id;
+            && clip.Id != last.Id
+            && !ArtistIdentity.Shares(ArtistIdentity.Keys(clip.Artist), ArtistIdentity.Keys(last.Artist));
     }
 
     private sealed class BucketIndex
@@ -481,7 +492,63 @@ public sealed class ProgrammingEngine
 
         public Dictionary<Guid, int> PlaysToday { get; } = [];
 
+        /// <summary>Passages du jour par artiste (featurings compris).</summary>
+        private readonly Dictionary<string, int> _artistPlays = new(StringComparer.Ordinal);
+
+        /// <summary>Artistes des derniers clips placés, du plus ancien au plus récent.</summary>
+        private readonly Queue<IReadOnlyList<string>> _recentArtists = new();
+
+        private int _artistSpacing;
+
         public IReadOnlyList<Clip> Hits => _catalog.Where(clip => clip.IsHit).ToList();
+
+        /// <summary>Compte des passages déjà prévus ailleurs dans la journée.</summary>
+        public void CountArtist(Clip clip, int plays)
+        {
+            if (plays <= 0)
+            {
+                return;
+            }
+
+            foreach (var name in ArtistIdentity.Keys(clip.Artist))
+            {
+                _artistPlays[name] = _artistPlays.GetValueOrDefault(name) + plays;
+            }
+        }
+
+        /// <summary>Passages du jour de l'artiste le plus diffusé du clip.</summary>
+        public int ArtistPlays(Clip clip)
+        {
+            var most = 0;
+            foreach (var name in ArtistIdentity.Keys(clip.Artist))
+            {
+                most = Math.Max(most, _artistPlays.GetValueOrDefault(name));
+            }
+
+            return most;
+        }
+
+        /// <summary>Un artiste du clip est passé dans les derniers clips (fenêtre d'espacement).</summary>
+        public bool RecentlyAired(Clip clip)
+        {
+            var names = ArtistIdentity.Keys(clip.Artist);
+            return names.Count > 0 && _recentArtists.Any(recent => ArtistIdentity.Shares(names, recent));
+        }
+
+        private void RecordArtist(Clip clip)
+        {
+            CountArtist(clip, 1);
+            if (_artistSpacing <= 0)
+            {
+                return;
+            }
+
+            _recentArtists.Enqueue(ArtistIdentity.Keys(clip.Artist));
+            while (_recentArtists.Count > _artistSpacing)
+            {
+                _recentArtists.Dequeue();
+            }
+        }
 
         public int ForeignBudget { get; private set; }
 
@@ -513,7 +580,7 @@ public sealed class ProgrammingEngine
             IReadOnlyList<TimeSlotInfo>? activeSlots = null)
         {
             var slots = activeSlots ?? TimeSlotInfo.All;
-            var index = new BucketIndex();
+            var index = new BucketIndex { _artistSpacing = Math.Max(0, rules.ArtistSpacing) };
             index._catalog.AddRange(catalog);
             foreach (var group in catalog.GroupBy(clip => new BucketKey(clip.IsBurkinabe, clip.Genre)))
             {
@@ -545,6 +612,7 @@ public sealed class ProgrammingEngine
             }
 
             PlaysToday[clip.Id] = PlaysToday.GetValueOrDefault(clip.Id) + 1;
+            RecordArtist(clip);
 
             if (!clip.IsBurkinabe)
             {
@@ -568,8 +636,14 @@ public sealed class ProgrammingEngine
             bool relaxDiversity,
             bool ignorePlayCap,
             TimeSpan? maxDuration = null,
-            IReadOnlySet<Guid>? skip = null)
+            IReadOnlySet<Guid>? skip = null,
+            bool artistSpacing = false)
         {
+            if (artistSpacing && _artistSpacing <= 0)
+            {
+                return null;
+            }
+
             var scored = new List<(Clip Clip, Queue<Clip> Queue, BucketKey Key, double Score)>();
             foreach (var (key, queue) in _buckets)
             {
@@ -590,6 +664,7 @@ public sealed class ProgrammingEngine
 
                 var rotated = 0;
                 var limit = queue.Count;
+                Clip? fallback = null;
                 while (rotated < limit)
                 {
                     var head = queue.Peek();
@@ -602,14 +677,27 @@ public sealed class ProgrammingEngine
                     var diversityOk = relaxDiversity || !rules.EnforceCulturalDiversity || RespectsDiversity(head, last);
                     var durationOk = maxDuration is null || head.Duration <= maxDuration;
                     var notSkipped = skip is null || !skip.Contains(head.Id);
-                    if (playOk && notRepeat && diversityOk && durationOk && notSkipped)
+                    var spacingOk = !artistSpacing || !RecentlyAired(head);
+                    if (playOk && notRepeat && diversityOk && durationOk && notSkipped && spacingOk)
                     {
-                        scored.Add((head, queue, key, EquityScore(head, key, slotInfo, rules)));
-                        break;
+                        // Premier de la file dont l'artiste n'est pas passé récemment ; sinon le premier admissible.
+                        if (_artistSpacing <= 0 || !RecentlyAired(head))
+                        {
+                            fallback = null;
+                            scored.Add((head, queue, key, EquityScore(head, key, slotInfo, rules, last)));
+                            break;
+                        }
+
+                        fallback ??= head;
                     }
 
                     queue.Enqueue(queue.Dequeue());
                     rotated++;
+                }
+
+                if (fallback is not null)
+                {
+                    scored.Add((fallback, queue, key, EquityScore(fallback, key, slotInfo, rules, last)));
                 }
             }
 
@@ -739,7 +827,7 @@ public sealed class ProgrammingEngine
         /// Un Hit ne gagne jamais contre un clip moins diffusé. Le score d'impact
         /// n'est qu'un départage minuscule (offre §1.2 équité, §3.2 stock faible).
         /// </summary>
-        private double EquityScore(Clip head, BucketKey key, TimeSlotInfo slotInfo, ProgrammingRules rules)
+        private double EquityScore(Clip head, BucketKey key, TimeSlotInfo slotInfo, ProgrammingRules rules, Clip? last)
         {
             var playsToday = PlaysToday.GetValueOrDefault(head.Id);
             var lifetime = head.LifetimePlayCount + playsToday;
@@ -747,12 +835,19 @@ public sealed class ProgrammingEngine
             var idle = _pickTurn - lastTurn;
             var audience = head.Audience == slotInfo.DefaultAudience ? 1.0 : 0.0;
             var impact = (double)head.ImpactScore * 0.02;
+            // Un artiste déjà beaucoup passé aujourd'hui recule, même avec un clip encore jamais diffusé ;
+            // le même artiste juste après lui-même n'arrive qu'en tout dernier recours.
+            var artist = _artistSpacing <= 0 ? 0.0 : ArtistPlays(head) * 400.0;
+            var backToBack = _artistSpacing > 0 && last is not null
+                && ArtistIdentity.Shares(ArtistIdentity.Keys(head.Artist), ArtistIdentity.Keys(last.Artist))
+                    ? 5000.0
+                    : 0.0;
             if (!rules.PreferUnderPlayed)
             {
-                return -playsToday * 10 + audience + impact;
+                return -playsToday * 10 - artist / 40 - backToBack + audience + impact;
             }
 
-            return -playsToday * 1000.0 - lifetime * 10.0 + idle * 3.0 + audience + impact;
+            return -playsToday * 1000.0 - artist - backToBack - lifetime * 10.0 + idle * 3.0 + audience + impact;
         }
 
         public void Return(Clip clip) => Enqueue(clip);

@@ -28,6 +28,13 @@ public sealed class ProgrammingRules
     public bool PreferBurkinabeUntilTarget { get; init; } = true;
 
     /// <summary>
+    /// Nombre de clips qui doivent passer avant qu'un même artiste (featurings compris) revienne à l'antenne.
+    /// Respecté tant que le catalogue le permet ; 0 désactive la règle. Au-delà, chaque passage de l'artiste
+    /// dans la journée fait reculer ses autres clips dans l'ordre de choix.
+    /// </summary>
+    public int ArtistSpacing { get; init; } = 8;
+
+    /// <summary>
     /// Null = durée réelle de la tranche (offre). Une valeur courte sert uniquement aux tests / prévisualisation.
     /// </summary>
     public TimeSpan? SlotFillLimit { get; init; }

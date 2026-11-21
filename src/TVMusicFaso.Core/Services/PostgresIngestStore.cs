@@ -250,7 +250,7 @@ public sealed class PostgresIngestStore : IIngestStore
                 COUNT(*) FILTER (WHERE stage = 5),
                 COUNT(*) FILTER (WHERE stage IN (6, 7)),
                 COUNT(*) FILTER (WHERE stage = 9 AND updated_at >= @since),
-                COUNT(*),
+                COUNT(*) FILTER (WHERE stage <> 10),
                 COALESCE(MAX(revision), 0)
             FROM ingest_items;
             """,

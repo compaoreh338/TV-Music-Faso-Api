@@ -131,6 +131,7 @@ public sealed class IngestHostedService : BackgroundService
         }
         else if (settings.Enabled)
         {
+            pipeline.PurgeRemovedFiles(settings);
             await pipeline.DetectDueAsync(settings, stoppingToken);
 
             if (ytDlp is null)

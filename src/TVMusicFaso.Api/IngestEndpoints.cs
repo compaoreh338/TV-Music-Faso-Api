@@ -104,6 +104,9 @@ public static class IngestEndpoints
         app.MapPost("/api/arrivals/{id:guid}/restore", (Guid id, HttpContext http, ApiComposition c) =>
             Run(http, c, (session, ingest) => Json(ingest.Restore(session, id))));
 
+        app.MapPost("/api/arrivals/{id:guid}/remove", (Guid id, HttpContext http, ApiComposition c) =>
+            Run(http, c, (session, ingest) => Json(ingest.Remove(session, id))));
+
         app.MapPost("/api/arrivals/{id:guid}/accept", (Guid id, HttpContext http, ApiComposition c) =>
             Run(http, c, (session, ingest) => Json(ingest.AcceptDespiteCheck(session, id))));
 
