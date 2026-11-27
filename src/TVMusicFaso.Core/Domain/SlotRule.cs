@@ -31,6 +31,15 @@ public sealed class SlotRule
 
     public List<MusicalGenre> SundayGenres { get; set; } = [];
 
+    /// <summary>Genres refusés en semaine, même quand la liste des genres autorisés est vide (« tous genres »).</summary>
+    public List<MusicalGenre> ExcludedGenres { get; set; } = [];
+
+    /// <summary>Genres refusés le vendredi.</summary>
+    public List<MusicalGenre> FridayExcludedGenres { get; set; } = [];
+
+    /// <summary>Genres refusés le dimanche.</summary>
+    public List<MusicalGenre> SundayExcludedGenres { get; set; } = [];
+
     public string Summary =>
         $"{Slot.ToDisplayName()} · {Mood.ToDisplayName()} · {Audience.ToDisplayName()}";
 
@@ -84,9 +93,26 @@ public sealed class SlotRule
         }
     }
 
-    public string GenresLabel => AllowedGenres.Count == 0
-        ? "Tous genres"
-        : string.Join(" · ", AllowedGenres.Select(genre => genre.ToDisplayName()));
+    public string GenresLabel
+    {
+        get
+        {
+            var allowed = AllowedGenres.Count == 0
+                ? "Tous genres"
+                : string.Join(" · ", AllowedGenres.Select(genre => genre.ToDisplayName()));
+            return ExcludedGenres.Count == 0
+                ? allowed
+                : $"{allowed} sauf {string.Join(" · ", ExcludedGenres.Select(genre => genre.ToDisplayName()))}";
+        }
+    }
+
+    /// <summary>Genres autorisés (vide = tous) et genres refusés pour un jour de diffusion.</summary>
+    public (IReadOnlyList<MusicalGenre> Allowed, IReadOnlyList<MusicalGenre> Excluded) GenresFor(DayOfWeek day) => day switch
+    {
+        DayOfWeek.Friday => (FridayGenres ?? [], FridayExcludedGenres ?? []),
+        DayOfWeek.Sunday => (SundayGenres ?? [], SundayExcludedGenres ?? []),
+        _ => (AllowedGenres ?? [], ExcludedGenres ?? [])
+    };
 
     public void ApplyClock(TimeOnly start, TimeOnly end)
     {
@@ -138,7 +164,10 @@ public sealed class SlotRule
         EndMinute = EndMinute,
         AllowedGenres = AllowedGenres.ToList(),
         FridayGenres = FridayGenres.ToList(),
-        SundayGenres = SundayGenres.ToList()
+        SundayGenres = SundayGenres.ToList(),
+        ExcludedGenres = ExcludedGenres.ToList(),
+        FridayExcludedGenres = FridayExcludedGenres.ToList(),
+        SundayExcludedGenres = SundayExcludedGenres.ToList()
     };
 
     private static string FormatClock(TimeOnly value) => $"{value.Hour:00}:{value.Minute:00}";
@@ -203,14 +232,8 @@ public sealed class SlotRuleCatalog
 
     public bool Matches(Clip clip, TimeSlot slot, DayOfWeek day)
     {
-        var rule = For(slot);
-        var allowed = day switch
-        {
-            DayOfWeek.Friday => rule.FridayGenres,
-            DayOfWeek.Sunday => rule.SundayGenres,
-            _ => rule.AllowedGenres
-        };
-        return allowed.Count == 0 || allowed.Contains(clip.Genre);
+        var (allowed, excluded) = For(slot).GenresFor(day);
+        return !excluded.Contains(clip.Genre) && (allowed.Count == 0 || allowed.Contains(clip.Genre));
     }
 
     /// <summary>Les 8 tranches de l’offre ; les genres supprimés dans l’écran « Genres » n’y figurent pas.</summary>
