@@ -13,6 +13,7 @@ public enum GenerationMode
 /// <param name="Genres">Plusieurs genres : le clip doit appartenir à l'un d'eux.</param>
 /// <param name="YearFrom">Année de sortie minimale du clip (incluse).</param>
 /// <param name="YearTo">Année de sortie maximale du clip (incluse).</param>
+/// <param name="ExcludedGenres">Genres refusés : tous les autres passent (si aucun genre n'est imposé).</param>
 public sealed record ThematicFilter(
     MusicalGenre? Genre = null,
     ClipTheme? Theme = null,
@@ -20,19 +21,28 @@ public sealed record ThematicFilter(
     bool BurkinabeOnly = false,
     IReadOnlyList<MusicalGenre>? Genres = null,
     int? YearFrom = null,
-    int? YearTo = null)
+    int? YearTo = null,
+    IReadOnlyList<MusicalGenre>? ExcludedGenres = null)
 {
     public bool IsEmpty => Genre is null && Theme is null && Language is null && !BurkinabeOnly
-        && AllGenres.Count == 0 && YearFrom is null && YearTo is null;
+        && AllGenres.Count == 0 && AllExcludedGenres.Count == 0 && YearFrom is null && YearTo is null;
 
     /// <summary><see cref="Genre"/> et <see cref="Genres"/> réunis, sans doublon.</summary>
     public IReadOnlyList<MusicalGenre> AllGenres =>
         (Genres ?? []).Concat(Genre is { } single ? [single] : []).Distinct().ToList();
 
+    /// <summary><see cref="ExcludedGenres"/> sans doublon.</summary>
+    public IReadOnlyList<MusicalGenre> AllExcludedGenres => (ExcludedGenres ?? []).Distinct().ToList();
+
     public bool Matches(Clip clip)
     {
         var genres = AllGenres;
         if (genres.Count > 0 && !genres.Contains(clip.Genre))
+        {
+            return false;
+        }
+
+        if (AllExcludedGenres.Contains(clip.Genre))
         {
             return false;
         }
@@ -65,6 +75,12 @@ public sealed record ThematicFilter(
             if (genres.Count > 0)
             {
                 parts.Add(string.Join(" + ", genres.Select(genre => genre.ToDisplayName())));
+            }
+
+            var excluded = AllExcludedGenres;
+            if (excluded.Count > 0)
+            {
+                parts.Add("sans " + string.Join(", ", excluded.Select(genre => genre.ToDisplayName())));
             }
 
             if (YearLabel is { } years)
